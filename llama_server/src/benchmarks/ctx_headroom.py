@@ -35,21 +35,21 @@ MODELS = [
     ("Qwen3.6-27B-MTP-Q4_K_M", matrix.MODEL_27B_MTP),
 ]
 
-DEFAULT_MIN_CTX_K = 16     # lower bound, assumed to fit
-DEFAULT_MAX_CTX_K = 256    # Qwen3.6 trains at 262144 (256k); no point above
+DEFAULT_MIN_CTX_K = 16  # lower bound, assumed to fit
+DEFAULT_MAX_CTX_K = 256  # Qwen3.6 trains at 262144 (256k); no point above
 DEFAULT_GRANULARITY_K = 8  # stop when the fit/spill bracket is this narrow
 # A fully-resident server sits near baseline (~0.02-0.2 GiB GTT); empirically
 # 0.78 GiB (27B/KVarN @240k) was already slow, so treat any meaningful process
 # GTT in system RAM as spill.
-DEFAULT_SPILL_GTT_GIB = 0.3       # process GTT above this = spilled into system RAM
-DEFAULT_VRAM_FLOOR_GIB = 0.3      # fallback only (no fdinfo): whole-card free floor
+DEFAULT_SPILL_GTT_GIB = 0.3  # process GTT above this = spilled into system RAM
+DEFAULT_VRAM_FLOOR_GIB = 0.3  # fallback only (no fdinfo): whole-card free floor
 DEFAULT_PORT = 1235
 DEFAULT_UBATCH = matrix.DEFAULT_UBATCH
 DEFAULT_HEALTH_WAIT = 240
 DEFAULT_SETTLE = 6.0
 
 KIB = 1024
-GIB = 1024 ** 3
+GIB = 1024**3
 
 DRM_VRAM_RE = re.compile(r"^drm-memory-vram:\s*(\d+)")
 DRM_GTT_RE = re.compile(r"^drm-memory-gtt:\s*(\d+)")
@@ -58,7 +58,9 @@ DRM_GTT_RE = re.compile(r"^drm-memory-gtt:\s*(\d+)")
 # ── GPU memory readers ────────────────────────────────────────────────────────
 def dgpu_vram_bytes() -> tuple[int, int] | None:
     """(used, total) bytes for the discrete GPU (VRAM total > 8 GiB)."""
-    for total_path in sorted(glob.glob("/sys/class/drm/card*/device/mem_info_vram_total")):
+    for total_path in sorted(
+        glob.glob("/sys/class/drm/card*/device/mem_info_vram_total")
+    ):
         try:
             total = int(Path(total_path).read_text())
             if total < 8 * GIB:
@@ -106,36 +108,79 @@ def build_server_cmd(model_path, ctx_size, port, ubatch, kv, mtp) -> list[str]:
         # Vulkan and measured within 0.4%, so headroom must be scanned against the
         # binary the profiles actually use. See docs/QWEN36_SPECULATION_BACKEND_AUDIT.md.
         matrix.BIN_VULKAN,
-        "-m", model_path, "--alias", "local",
-        "--device", "Vulkan0", "-ngl", "99",
+        "-m",
+        model_path,
+        "--alias",
+        "local",
+        "--device",
+        "Vulkan0",
+        "-ngl",
+        "99",
         # A failed auto-fit is fatal and auto-fit always aborts when -ngl is
         # explicit, so keep it off at every context. Matches common.sh.
-        "-fit", "off",
-        "-c", str(ctx_size), "-t", str(cores), "-tb", str(threads),
-        "--parallel", "1",
-        "--cache-type-k", ck, "--cache-type-v", cv,
-        "--flash-attn", "on", "--ubatch-size", str(ubatch), "--no-context-shift",
-        "--port", str(port), "--host", "127.0.0.1", "--timeout", "0", "--log-colors", "off",
+        "-fit",
+        "off",
+        "-c",
+        str(ctx_size),
+        "-t",
+        str(cores),
+        "-tb",
+        str(threads),
+        "--parallel",
+        "1",
+        "--cache-type-k",
+        ck,
+        "--cache-type-v",
+        cv,
+        "--flash-attn",
+        "on",
+        "--ubatch-size",
+        str(ubatch),
+        "--no-context-shift",
+        "--port",
+        str(port),
+        "--host",
+        "127.0.0.1",
+        "--timeout",
+        "0",
+        "--log-colors",
+        "off",
     ]
     if mtp:
         cmd += [
-            "--spec-type", "draft-mtp", "--spec-draft-n-max", "2", "--spec-draft-p-min", "0.0",
-            "--spec-draft-type-k", "q8_0", "--spec-draft-type-v", "q8_0",
+            "--spec-type",
+            "draft-mtp",
+            "--spec-draft-n-max",
+            "2",
+            "--spec-draft-p-min",
+            "0.0",
+            "--spec-draft-type-k",
+            "q8_0",
+            "--spec-draft-type-v",
+            "q8_0",
         ]
     return cmd
 
 
 # ── One probe: load at ctx_k, classify fit / spill / fail ─────────────────────
 def test_ctx(model_path, ctx_k, log_path, kv, args) -> dict:
-    cmd = build_server_cmd(model_path, ctx_k * 1024, args.port, args.ubatch_size, kv, args.mtp)
+    cmd = build_server_cmd(
+        model_path, ctx_k * 1024, args.port, args.ubatch_size, kv, args.mtp
+    )
     env = os.environ.copy()
     env.pop("HIP_VISIBLE_DEVICES", None)  # Vulkan path
-    out = {"ctx_k": ctx_k, "result": "fail", "proc_vram_gib": None,
-           "proc_gtt_gib": None, "vram_free_gib": None}
+    out = {
+        "ctx_k": ctx_k,
+        "result": "fail",
+        "proc_vram_gib": None,
+        "proc_gtt_gib": None,
+        "vram_free_gib": None,
+    }
 
     with log_path.open("w", encoding="utf-8") as lf:
-        proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, env=env,
-                                start_new_session=True)
+        proc = subprocess.Popen(
+            cmd, stdout=lf, stderr=subprocess.STDOUT, env=env, start_new_session=True
+        )
         try:
             if not matrix.wait_for_health(args.port, args.startup_timeout, proc):
                 out["result"] = "fail"  # never became healthy: too big / load error
@@ -176,8 +221,10 @@ def find_max_ctx(name, model_path, kv, logs_dir, args) -> dict:
         log_path = logs_dir / f"{name}-{kv}-{ctx_k}k.log"
         r = test_ctx(model_path, ctx_k, log_path, kv, args)
         probes.append(r)
-        print(f"    {ctx_k:>4}k -> {r['result']:<5}  procVRAM {fmt(r['proc_vram_gib'])}  "
-              f"procGTT {fmt(r['proc_gtt_gib'])}  VRAMfree {fmt(r['vram_free_gib'])}")
+        print(
+            f"    {ctx_k:>4}k -> {r['result']:<5}  procVRAM {fmt(r['proc_vram_gib'])}  "
+            f"procGTT {fmt(r['proc_gtt_gib'])}  VRAMfree {fmt(r['vram_free_gib'])}"
+        )
         time.sleep(args.settle_seconds)
         return r
 
@@ -186,13 +233,23 @@ def find_max_ctx(name, model_path, kv, logs_dir, args) -> dict:
 
     r_lo = probe(lo)
     if r_lo["result"] != "fit":
-        return {"name": name, "max_fit_k": None, "spill_k": lo,
-                "note": f"does not fit even at {lo}k ({r_lo['result']})", "at": r_lo}
+        return {
+            "name": name,
+            "max_fit_k": None,
+            "spill_k": lo,
+            "note": f"does not fit even at {lo}k ({r_lo['result']})",
+            "at": r_lo,
+        }
 
     r_hi = probe(hi)
     if r_hi["result"] == "fit":
-        return {"name": name, "max_fit_k": hi, "spill_k": None,
-                "note": f">= {hi}k (no spill within tested range)", "at": r_hi}
+        return {
+            "name": name,
+            "max_fit_k": hi,
+            "spill_k": None,
+            "note": f">= {hi}k (no spill within tested range)",
+            "at": r_hi,
+        }
 
     best, best_r = lo, r_lo
     spill_k = hi
@@ -206,42 +263,79 @@ def find_max_ctx(name, model_path, kv, logs_dir, args) -> dict:
             best, best_r, lo = mid, r, mid
         else:
             spill_k, hi = mid, mid
-    return {"name": name, "max_fit_k": best, "spill_k": spill_k,
-            "note": f"fits to ~{best}k, spills by {spill_k}k", "at": best_r}
+    return {
+        "name": name,
+        "max_fit_k": best,
+        "spill_k": spill_k,
+        "note": f"fits to ~{best}k, spills by {spill_k}k",
+        "at": best_r,
+    }
 
 
 # ── CSV / args / main ─────────────────────────────────────────────────────────
-CSV_FIELDS = ["model", "kv", "mtp", "max_fit_ctx_k", "first_spill_ctx_k",
-              "proc_vram_gib_at_max", "proc_gtt_gib_at_max", "vram_free_gib_at_max", "note"]
+CSV_FIELDS = [
+    "model",
+    "kv",
+    "mtp",
+    "max_fit_ctx_k",
+    "first_spill_ctx_k",
+    "proc_vram_gib_at_max",
+    "proc_gtt_gib_at_max",
+    "vram_free_gib_at_max",
+    "note",
+]
 
 
 def default_output_path() -> Path:
     stamp = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
-    d = Path(matrix.LLAMA_SERVER_DIR) / "output" / "benchmarks" / f"ctx-headroom-{stamp}"
+    d = (
+        Path(matrix.LLAMA_SERVER_DIR)
+        / "output"
+        / "benchmarks"
+        / f"ctx-headroom-{stamp}"
+    )
     return d / f"ctx-headroom-{stamp}.csv"
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--kv", default="q8_0,q5_1",
-                   help="comma list of KV types to test per model: q8_0,q5_1,q5_0,q4_0")
-    p.add_argument("--mtp", action=argparse.BooleanOptionalAction, default=True,
-                   help="include the MTP draft context (matches production); --no-mtp tests base")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--kv",
+        default="q8_0,q5_1",
+        help="comma list of KV types to test per model: q8_0,q5_1,q5_0,q4_0",
+    )
+    p.add_argument(
+        "--mtp",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="include the MTP draft context (matches production); --no-mtp tests base",
+    )
     p.add_argument("--min-ctx-k", type=int, default=DEFAULT_MIN_CTX_K)
     p.add_argument("--max-ctx-k", type=int, default=DEFAULT_MAX_CTX_K)
     p.add_argument("--granularity-k", type=int, default=DEFAULT_GRANULARITY_K)
-    p.add_argument("--spill-gtt-gib", type=float, default=DEFAULT_SPILL_GTT_GIB,
-                   help="server-process GTT (system RAM) above this = spilled (default 0.3)")
-    p.add_argument("--vram-floor-gib", type=float, default=DEFAULT_VRAM_FLOOR_GIB,
-                   help="fallback only (no fdinfo): whole-card free VRAM below this = spill (default 0.3)")
+    p.add_argument(
+        "--spill-gtt-gib",
+        type=float,
+        default=DEFAULT_SPILL_GTT_GIB,
+        help="server-process GTT (system RAM) above this = spilled (default 0.3)",
+    )
+    p.add_argument(
+        "--vram-floor-gib",
+        type=float,
+        default=DEFAULT_VRAM_FLOOR_GIB,
+        help="fallback only (no fdinfo): whole-card free VRAM below this = spill (default 0.3)",
+    )
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--ubatch-size", type=int, default=DEFAULT_UBATCH)
     p.add_argument("--startup-timeout", type=int, default=DEFAULT_HEALTH_WAIT)
     p.add_argument("--settle-seconds", type=float, default=DEFAULT_SETTLE)
     p.add_argument("--min-free-vram-gib", type=float, default=18.0)
     p.add_argument("--output", type=Path)
-    p.add_argument("--only", default="",
-                   help="substring filter on model name (e.g. Q4_K_M)")
+    p.add_argument(
+        "--only", default="", help="substring filter on model name (e.g. Q4_K_M)"
+    )
     p.add_argument("--list", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args()
@@ -268,14 +362,25 @@ def main():
         for n, pth in MODELS:
             ok = "OK" if os.path.isfile(pth) else "MODEL MISSING"
             for kv in args.kv_list:
-                cmd = build_server_cmd(pth, args.max_ctx_k * 1024, args.port, args.ubatch_size, kv, args.mtp)
-                print(f"\n{n}  kv={kv}  [{ok}]  search {args.min_ctx_k}k..{args.max_ctx_k}k (±{args.granularity_k}k)")
+                cmd = build_server_cmd(
+                    pth,
+                    args.max_ctx_k * 1024,
+                    args.port,
+                    args.ubatch_size,
+                    kv,
+                    args.mtp,
+                )
+                print(
+                    f"\n{n}  kv={kv}  [{ok}]  search {args.min_ctx_k}k..{args.max_ctx_k}k (±{args.granularity_k}k)"
+                )
                 print("  " + " ".join(subprocess.list2cmdline([c]) for c in cmd))
         return
     if output_csv.exists():
         raise SystemExit(f"refusing to overwrite existing output: {output_csv}")
     if not matrix.port_is_available(args.port):
-        raise SystemExit(f"benchmark port {args.port} is in use; refusing to disturb it")
+        raise SystemExit(
+            f"benchmark port {args.port} is in use; refusing to disturb it"
+        )
 
     print("=" * 74)
     print(f"  Context-headroom finder — kv={','.join(args.kv_list)} mtp={args.mtp}")
@@ -300,9 +405,15 @@ def main():
             res = find_max_ctx(name, model_path, kv, logs_dir, args)
             at = res.get("at") or {}
             row = {
-                "model": name, "kv": kv, "mtp": args.mtp,
-                "max_fit_ctx_k": res["max_fit_k"] if res["max_fit_k"] is not None else "N/A",
-                "first_spill_ctx_k": res["spill_k"] if res["spill_k"] is not None else "N/A",
+                "model": name,
+                "kv": kv,
+                "mtp": args.mtp,
+                "max_fit_ctx_k": res["max_fit_k"]
+                if res["max_fit_k"] is not None
+                else "N/A",
+                "first_spill_ctx_k": res["spill_k"]
+                if res["spill_k"] is not None
+                else "N/A",
                 "proc_vram_gib_at_max": fmt(at.get("proc_vram_gib"), ""),
                 "proc_gtt_gib_at_max": fmt(at.get("proc_gtt_gib"), ""),
                 "vram_free_gib_at_max": fmt(at.get("vram_free_gib"), ""),
@@ -314,15 +425,21 @@ def main():
             print(f"  => {name} [{kv}]: {res['note']}")
 
     print("\n" + "=" * 94)
-    print(f"  {'Model':<30} {'KV':>6} {'max fit':>8} {'spills by':>10} {'procVRAM':>9} {'procGTT':>8}")
+    print(
+        f"  {'Model':<30} {'KV':>6} {'max fit':>8} {'spills by':>10} {'procVRAM':>9} {'procGTT':>8}"
+    )
     print("-" * 94)
     for r in results:
         mk = f"{r['max_fit_ctx_k']}k" if r["max_fit_ctx_k"] != "N/A" else "none"
         sk = f"{r['first_spill_ctx_k']}k" if r["first_spill_ctx_k"] != "N/A" else "-"
-        print(f"  {r['model'][:30]:<30} {r['kv']:>6} {mk:>8} {sk:>10} "
-              f"{r['proc_vram_gib_at_max']:>9} {r['proc_gtt_gib_at_max']:>8}")
+        print(
+            f"  {r['model'][:30]:<30} {r['kv']:>6} {mk:>8} {sk:>10} "
+            f"{r['proc_vram_gib_at_max']:>9} {r['proc_gtt_gib_at_max']:>8}"
+        )
     print("=" * 94)
-    print(f"  mtp={args.mtp}. 'max fit' = largest -c with server-process GTT <= {args.spill_gtt_gib} GiB.")
+    print(
+        f"  mtp={args.mtp}. 'max fit' = largest -c with server-process GTT <= {args.spill_gtt_gib} GiB."
+    )
     print(f"\n  Results saved to {output_csv} ({len(results)} rows)")
 
 

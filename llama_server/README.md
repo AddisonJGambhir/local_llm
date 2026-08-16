@@ -1,6 +1,6 @@
 # Local LLM Workstation (`llama_server/`)
 
-Local llama.cpp serving, benchmarking, and diagnostics across **three models** on a
+Local llama.cpp serving, benchmarking, and diagnostics across **five models** on a
 dual-GPU AMD workstation:
 
 | GPU | Model | VRAM | Role |
@@ -12,20 +12,19 @@ dual-GPU AMD workstation:
 
 | Model | Size | Arch | Specs | Dec t/s | Pre t/s | GPU |
 | --- | ---: | --- | --- | ---: | ---: | --- |
-| **Qwen3.6 35B-A3B** Q8_0 | 36 GB | MoE (3B active) | MTP n_max=2, f16 KV, dual-GPU | 93.7 vk / 81.5 rocm | 2072 / 2511 | dual |
-| **Qwen3.8 27B** Q8_0 | 28 GB | Dense | MTP n_max=3, q8_0 KV, dual-GPU | — / 81.5 | 786.6 / — | dual (ROCm) |
-| **Muse Glimmer 30B** Q8_0 | 28 GB | Dense | DFlash n_max=4, q8_0 KV, single-GPU | 73.8 vk / 45.8 rocm | — | single |
-| Qwen3.6 27B-MTP Q4_K_M | 16 GB | Dense | MTP n_max=4, q8_0 KV, single-GPU | 76.3 | — | single |
+| **Qwen3.6 35B-A3B** Q8_0 | 36 GB | MoE (3B active) | MTP n_max=2, f16 KV, dual-GPU | 93.7 vk / **94.4** rocm | **2072** / **3128** | dual |
+| **Nemotron 3.5 Lightning** 30B-A3B Q8_0 | 33 GB | Mamba-2/attention MoE | spec off (upstream MTP hang), f16 KV | 94.6 (256k) / 94.7 (1M) | 3034 (256k) / 2555 (1M) | dual (ROCm) |
+| **Qwen3.8 27B** Q8_0 | 28 GB | Dense + vision | MTP n_max=3, f16 KV, dual-GPU | 35.0 vk / **38.5** rocm | 825 / **982** | dual |
+| **Muse Glimmer 30B** Q8_0 | 28 GB | Dense | DFlash n_max=2, f16 KV, dual-GPU | 31.7 vk / **33.2** rocm | 743 / **986** | dual |
+| Qwen3.6 27B-MTP Q4_K_M | 16 GB | Dense | MTP, q8_0 KV, single-GPU | ~73–76 (May harness) | — | single |
 
-**Profile selection is workload-driven:**
+**Profile selection is workload-driven (2026-08-16 numbers):**
 
-- Long generation (chat, agentic, reasoning): use the **35B MoE Vulkan** profile
-  (fastest decode at ~94 t/s).
-- Big paste / long-context prefill: use the **35B MoE ROCm** profile
-  (2511 prefill vs 2072; wins when prompt > 19× generated tokens).
-- Vision + coding: use the **35B MoE ROCm dual** profile with `--mmproj`.
-- Text-only sessions, maximum prefill speed: **Qwen3.8 27B ROCm**
-  (2511 prefill, 81.5 decode).
+- Long generation (chat, agentic, reasoning): **35B MoE ROCm dual** (94.4 t/s, 3128 prefill).
+- 1M context: **Nemotron 3.5** at 2555 prefill, 94.7 decode (speculation off; upstream MTP hang).
+- Vision + coding: **35B MoE ROCm dual with `--mmproj`** (vision tower pinned to the R9700).
+- Text-only, maximum prefill: **Qwen3.8 27B ROCm `ppopt`** (q8_0 KV, ts 1,1).
+- Dense quality, single GPU: **27B MTP Q4_K_M** 128k presets.
 
 ## Quick start
 
@@ -127,35 +126,57 @@ A top-level launcher with three paths:
 3. Presets        advised Vulkan + MTP configurations (single-GPU)
 ```
 
-#### Preset summary (single-GPU, Vulkan)
+#### Preset summary (single-GPU, Vulkan / ROCm)
 
-| Model | KV | Context | Spec | n_max | Dec t/s |
-| --- | --- | ---: | --- | ---: | ---: |
-| Qwen3.6 35B MoE Q8_0 | q8_0 | 256k | MTP | 2 | ~94 |
-| Qwen3.6 35B MoE Q4_K_M | KVarN 5/4 | 190k | MTP | 2 | ~190 |
-| Qwen3.6 27B Q4_K_M | KVarN 5/4 | 220k | MTP | 2 | ~76 |
-| Qwen3.6 27B MTP Q4_K_M | q8_0 | 128k | MTP | 2 | ~73 |
+| Profile | Model | Backend | KV | Ctx | Spec | n_max | Dec t/s |
+| --- | --- | --- | --- | ---: | --- | ---: | ---: |
+| `default.sh` | 35B MoE Q8_0 | Vulkan | q8_0 | 256k | MTP | 2 | ~94¹ |
+| `preset-27b-q4km-q8-128k` | 27B MTP Q4_K_M | Vulkan | q8_0 | 128k | MTP | 4 | ~76¹ |
+| `preset-27b-q4km-rocm-q8-128k` | 27B MTP Q4_K_M | ROCm | q8_0 | 128k | MTP | 2 | ~49¹ |
+| `preset-36-27b-q4km-vulkan-xtx-only-128k` | 27B MTP Q4_K_M | Vulkan | q8_0 | 128k | MTP | 2 | — |
+
+¹ 2026-05 harness (pre-f16-KV era); re-measure before trusting. `default.sh` is the
+single-GPU fallback (ubatch 1024, q8_0 KV); the xtx-only preset is for when the
+R9700 is needed elsewhere (batch 2048).
 
 #### Dual-GPU presets (ROCm + Vulkan)
 
-| Profile | Model | Backend | KV | Context | n_max | Dec / Pre t/s |
-| --- | --- | --- | --- | ---: | ---: | --- |
-| `preset-36-35b-a3b-q8-rocm-dual-q8-256k-mmproj` | 35B MoE Q8_0 | ROCm | f16 | 256k | 2 | 81.5 / 2511 |
-| `preset-36-35b-a3b-q8-vulkan-dual-q8-256k-mmproj` | 35B MoE Q8_0 | Vulkan | f16 | 256k | 2 | 93.7 / 2072 |
-| `preset-38-27b-q8-rocm-dual-q8-256k-mmproj` | 27B Q8_0 | ROCm | q8_0 | 256k | 3 | 81.5 / 1087 |
-| `preset-38-27b-q8-vulkan-dual-q8-256k-mmproj` | 27B Q8_0 | Vulkan | q8_0 | 256k | 3 | — / 786.6 |
+All dual profiles use `HIP_VISIBLE_DEVICES=0,1`, `LLAMA_CACHE_RAM=24576`,
+`LLAMA_TIMEOUT=3600`, `MTMD_BACKEND_DEVICE=ROCm1` (or `Vulkan1`) for vision towers.
+Large batch `6144–12288` (ROCm only; no-op on Vulkan).
+
+| Profile | Model | Backend | KV | Ctx | Spec | n_max | Pre t/s | Dec t/s | Acc | XTX/R9700 GiB |
+| --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | --- |
+| `preset-36-35b-a3b-q8-rocm-dual-256k-textonly` | 35B MoE Q8_0 | ROCm | f16 | 256k | MTP | 2 | **3128** | **94.4** | 80.9% | 21.0 / 30.2 |
+| `preset-36-35b-a3b-q8-rocm-dual-q8-256k-mmproj` | 35B MoE Q8_0 + vision | ROCm | f16 | 256k | MTP | 2 | 3128 | 94.4 | 80.9% | 21.0 / 30.2 |
+| `preset-36-35b-a3b-q8-vulkan-dual-256k-textonly` | 35B MoE Q8_0 | Vulkan | f16 | 256k | MTP | 2 | 2072 | 93.7 | — | — |
+| `preset-36-35b-a3b-q8-vulkan-dual-q8-256k-mmproj` | 35B MoE Q8_0 + vision | Vulkan | f16 | 256k | MTP | 2 | 2072 | 93.7 | — | — |
+| `preset-36-27b-q4km-rocm-dual-256k` | 27B MTP Q4_K_M | ROCm | f16 | 256k | MTP | 2 | 1408 | 36.9 | 69.8% | 19.7 / 20.9 |
+| `preset-36-27b-q4km-vulkan-dual-256k` | 27B MTP Q4_K_M | Vulkan | f16 | 256k | MTP | 2 | — | — | — | — |
+| `preset-38-27b-q8-rocm-dual-q8-256k-mmproj` | Qwen3.8 27B + vision | ROCm | f16 | 256k | MTP | 3 | 982 | 38.5 | 42–72% | 22.5 / 29.7 |
+| `preset-38-27b-q8-rocm-dual-256k-ppopt` | Qwen3.8 27B + vision | ROCm | q8_0 | 256k | MTP | 3 | — | — | — | — |
+| `preset-38-27b-q8-vulkan-dual-q8-256k-mmproj` | Qwen3.8 27B + vision | Vulkan | f16 | 256k | MTP | 3 | 825 | 35.0 | 53.8% | 22.2 / 29.4 |
+| `preset-muse-glimmer-30b-q8-rocm-dual-128k-dflash` | Muse Glimmer 30B | ROCm | f16 | 128k | DFlash | 2 | 986 | 33.2 | 58.5% | 18.2 / 16.5 |
+| `preset-muse-glimmer-30b-q8-rocm-dual-256k-yarn` | Muse Glimmer 30B | ROCm | f16 | 256k | DFlash | 2 | 891 | 34.1 | 3/3 @149k | 19.9 / 18.3 |
+| `preset-muse-glimmer-30b-q8-vulkan-dual-128k-dflash` | Muse Glimmer 30B | Vulkan | f16 | 128k | DFlash | 2 | 743 | 31.7 | 43.2% | 18.2 / 16.5 |
+| `preset-nemotron35-30b-a3b-q8-rocm-dual-256k` | Nemotron 3.5 30B | ROCm | f16 | 256k | off² | — | 3034 | 94.6 | n/a | 19.9 / 18.6 |
+| `preset-nemotron35-30b-a3b-q8-rocm-dual-1m` | Nemotron 3.5 30B | ROCm | f16 | **1M** | off² | — | 2555 | 94.7 | n/a | 19.9 / 29.4 |
+
+² Nemotron's built-in MTP hangs ~37% of generations (upstream bug). Speculation
+ships **off**; decode still hits 94+ t/s. The `mmproj` profiles pin the vision
+tower to the R9700 (`MTMD_BACKEND_DEVICE`); text stats = text-only sibling.
+`ppopt` is the pre-f16 q8_0 text-only variant (ts 1,1); kept for max prefill.
 
 ### Model menu (llamaserver)
 
+The launcher offers **4 models**:
+
 | Key | Model | Arch | MTP |
 | --- | --- | --- | --- |
-| 1 | Qwen3.6 35B MoE, Q8_0 | MoE (A3B) | yes |
-| 2 | Qwen3.6 27B, Q4_K_M | dense | yes |
-| 3 | Qwen3.6 27B, IQ4_NL | dense | no |
-| 4 | Qwen3.6 35B MoE, IQ4_NL | MoE (A3B) | no |
-| 5 | Qwen3.6 35B MoE, Q4_K_M | MoE (A3B) | yes |
-| 6 | Muse Glimmer 30B, Q8_0 | dense | no |
-| 7 | Qwen3.8 27B, Q8_0 | dense, vision | yes |
+| 1 | Qwen 3.6 35B-A3B MoE MTP, Q8_0 | MoE (A3B) | yes |
+| 2 | Qwen 3.8 27B MTP, Q8_0 (vision) | dense | yes |
+| 3 | Muse Glimmer 30B, Q8_0 (DFlash sidecar) | dense | no |
+| 4 | Qwen 3.6 27B MTP, Q4_K_M | dense | yes |
 
 It writes `~/.local/state/local-llm/interactive-profile.sh`, sourcing either the
 selected preset or `default.sh` plus the custom overrides, then runs
@@ -212,15 +233,17 @@ or Vulkan (`HIP_VISIBLE_DEVICES=0,1`). They load on:
 
 ### MTP speculation depth (measured, not guessed)
 
-Draft depth is **not portable** across models. Each model and backend has its own optimum:
+Draft depth is **not portable** across models. Each model and backend has its own optimum
+(measured on the 2026-08-16 harness; f16 KV, dual-GPU):
 
 | Model | Optimal n_max | Dec at opt | Why |
 | --- | ---: | ---: | --- |
-| 35B MoE (both backends) | **2** | 93.7 vk / 81.5 rocm | MoE decode step is fast (7.5 ms @ batch-1); deeper drafts cost more in the verify pass than they save. n_max=3 is slower (86.1 vk / 76.9 rocm). |
-| 27B Dense (Vulkan) | **3** | 76.3 | Dense decode step is expensive (25.9 ms @ batch-1); deeper drafts pay off until n=4 which starts collapsing (42.1 ms batch-4). |
-| 27B Dense (ROCm) | **2** | 48.5 | ROCm verify pass scaling is different — n_max=3 gains are marginal, n_max=4 collapses. |
-| Muse Glimmer (ROCm) | **15** | 45.8 | DFlash, different mechanism entirely. |
-| Muse Glimmer (Vulkan) | **4** | 73.8 | Same DFlash drafter but Vulkan verify costs more, so shallow depth wins. |
+| 35B MoE (ROCm) | **2** | **94.4** | MoE decode step is fast (7.5 ms @ batch-1); deeper drafts cost more in the verify pass than they save. |
+| 35B MoE (Vulkan) | **2** | **93.7** | Same MoE reason; Vulkan verify is cheaper but n_max=3 still collapses. |
+| 27B Dense (Vulkan) | **3** | 35.0 | Dense decode step is expensive; deeper drafts pay off until n=4 which collapses. |
+| 27B Dense (ROCm) | **2** | 36.9 | ROCm verify pass scaling differs — n_max=3 gains marginal, n_max=4 collapses. |
+| Muse Glimmer (ROCm) | **2** | 33.2 | DFlash on this box: n-max sweep 1/2/4/8/15 → acceptance 60.5/43.6/21.7/11.9/6.5%. Upstream recommends 15; it measures **worst** here (was the optimal for Q5_K_M on a **single** GPU). |
+| Muse Glimmer (Vulkan) | **2** | 31.7 | Same drafter; dual-GPU verify cost favors shallow depth on both backends. |
 
 Mainline's adaptive-p controller can adapt depth per step within the ceiling.
 On the MoE, even with the controller on, n_max=3 is slower than n_max=2 because the
@@ -229,7 +252,7 @@ verify pass at 3-wide is already expensive relative to the fast MoE decode.
 ### ubatch tuning
 
 The single largest prefill win found: raising ubatch from 192 to 512 lifted MoE
-prefill from 1319 to 2332 t/s (+77%) with zero decode cost.
+prefill from 1319 to 2332 t/s (+77%) with zero decode cost (June 2026).
 
 | Model | ubatch | Prefill t/s | Dec t/s | XTX free |
 | --- | ---: | ---: | ---: | ---: |
@@ -238,9 +261,12 @@ prefill from 1319 to 2332 t/s (+77%) with zero decode cost.
 | 27B Dense @128k | 512 | 787 | ~82 | 1.00 GiB |
 | 27B Dense @128k | 1024 | 808 | ~82 | 0.56 GiB |
 
-Chose 512 for both — 1024 barely improves prefill while cutting free VRAM too thin
-for the desktop. The 35B MoE dual-GPU profile uses 1024 because the second GPU
-provides the headroom.
+The current shape: ROCm dual-GPU profiles use **ubatch 512** and **batch-size 6144–12288**
+(+13% prefill, ROCm-only — a measured no-op on Vulkan, confirmed on three models).
+Vulkan stays at batch 2048 (no-op above that). The 35B dual uses ubatch 1024 because
+the second GPU provides the headroom. The table above is historical; the 512/1024
+comparison is still correct but the final operating point was re-tuned on the
+08-16 harness with the larger batch sizes.
 
 ---
 
@@ -248,13 +274,11 @@ provides the headroom.
 
 | Binary | Path | Used for |
 | --- | --- | --- |
-| mainline ROCm | `../llama.cpp/build/bin/llama-server` | 35B MoE dual-GPU (ROCm), Muse DFlash |
-| mainline Vulkan | `../llama.cpp/build-vulkan/bin/llama-server` | 35B MoE single/dual-GPU (Vulkan), 27B Vulkan |
-**Current state:** Mainline 10358 is the only installed engine and serves MTP,
-DFlash and adaptive-p speculation for all models on both backends. The BeeLlama
-v0.3.2 tree was removed 2026-08-16: its one exclusive feature (KVarN) is
-superseded by f16 KV on dual-GPU, and mainline measured within 0.4% of BeeLlama
-on MoE MTP decode (2026-08-11 audit).
+| mainline ROCm | `../llama.cpp/build/bin/llama-server` | All ROCm dual-GPU profiles (35B, 27B, Qwen3.8, Muse, Nemotron) |
+| mainline Vulkan | `../llama.cpp/build-vulkan/bin/llama-server` | All Vulkan profiles (35B, 27B, Qwen3.8, Muse, single-GPU default) |
+
+**Current state:** Mainline 10358 is the only installed engine.
+BeeLlama v0.3.2 was removed 2026-08-16.
 
 ---
 
@@ -281,8 +305,10 @@ Key points:
 ### DFlash — Muse Glimmer only
 
 Muse Glimmer uses the `dflash-kquant.gguf` sidecar with mainline ROCm or Vulkan.
-It drafts blocks of up to 15 tokens. Optimal n_max differs by backend: 15 on ROCm,
-4 on Vulkan. DFlash and MTP are mutually exclusive.
+It drafts blocks of up to 15 tokens; on this box the optimal n_max is **2 on both
+backends** (f16 KV, dual-GPU, 2026-08-16 re-measurement). The old 15/4 numbers
+were single-GPU Q5_K_M (single GPU makes the verify pass cheap enough for deep
+drafts; dual-GPU penalizes them). DFlash and MTP are mutually exclusive.
 
 > **Qwen DFlash is NOT recommended.** MTP beats DFlash on Qwen models by 22% (MoE)
 > and 12% (dense), while using less VRAM. The old Qwen DFlash sidecars were
@@ -302,9 +328,13 @@ Workaround: restart the server after heavy image use, or run a text-only profile
 ## KV cache types
 
 | Type | Notes |
-| `q8_0` | symmetric 8-bit KV, safe quality, used by default on single-GPU |
-| `f16` | full-float KV. Faster decode on Vulkan (no dequant), used on dual-GPU 35B MoE |
-| `kvarn5` / `kvarn4` | Retired with the BeeLlama tree (2026-08-16). Was q6-class quality at q4-class size; superseded by f16 KV on dual-GPU. No active profile uses it. |
+| `f16` | full-float KV — the **standing default (2026-08-16)**. Raises speculative
+  acceptance (quantized KV makes drafter and target disagree): Muse 43.6→58.5%,
+  +19% decode. Use q8_0 only where f16 genuinely does not fit, and record why. |
+| `q8_0` | symmetric 8-bit KV; used only where f16 does not fit (single-GPU 24 GB cards,
+  Qwen3.8 `ppopt` prefill variant). |
+| `kvarn5` / `kvarn4` | Retired with the BeeLlama tree (2026-08-16). Was q6-class quality at q4-class size;
+  superseded by f16 KV on dual-GPU. No active profile uses it. |
 | `q5_1` / `q5_0` / `q4_0` | smaller/older; Vulkan base only. Archived. |
 
 ---
@@ -355,6 +385,9 @@ baseline (~0.02–0.2 GiB GTT on ROCm).
 
 ### Single-GPU context ceilings (Vulkan, MTP on, f16/q8_0 KV, ubatch 512)
 
+> Historical (May–June 2026, single XTX). The KVarN rows are retired with BeeLlama;
+dual-GPU headroom makes these ceilings moot for the tuned profiles.
+
 | Model | KV | Max context | Spills by | procVRAM |
 | --- | --- | ---: | ---: | ---: |
 | 35B MoE Q8_0 | q8_0 | ≥256k | — | 20.10 GiB |
@@ -364,8 +397,6 @@ baseline (~0.02–0.2 GiB GTT on ROCm).
 | 27B MTP Q4_K_M | q8_0 | **195k** | 216k | 23.28 GiB |
 | 27B MTP Q4_K_M | kvarn5/4 | **220k** | — | 22.59 GiB |
 
-Bold = real-world tested conservative ceilings that override automated scan results.
-
 ---
 
 ## Models (`models/`)
@@ -373,9 +404,9 @@ Bold = real-world tested conservative ceilings that override automated scan resu
 | GGUF | Size | Type |
 | --- | ---: | --- |
 | `Qwen3.6-35B-A3B-Q8_0.gguf` | 36 GB | MoE + MTP, Q8_0 — **dual-GPU primary** |
-| `NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q8_0.gguf` | 33 GB | Mamba-2/attention MoE + MTP, Q8_0 — **dual-GPU candidate** |
-| `Qwen3.8-27B-Q8_0.gguf` | 28 GB | Dense + MTP, Q8_0 — **dual-GPU ROCm** |
-| `Muse-Glimmer-30B-Q8_0.gguf` | 28 GB | Dense + DFlash, Q8_0 — **single-GPU** |
+| `NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q8_0.gguf` | 33 GB | Mamba-2/attention MoE — **dual-GPU shipped (spec off)** |
+| `Qwen3.8-27B-Q8_0.gguf` | 28 GB | Dense + MTP + vision — **dual-GPU (ROCm + Vulkan)** |
+| `Muse-Glimmer-30B-Q8_0.gguf` | 28 GB | Dense + DFlash — **dual-GPU (ROCm + Vulkan, YaRN 256k variant)** |
 | `Qwen3.6-27B-MTP-Q4_K_M.gguf` | 16 GB | Dense + MTP, Q4_K_M — **single-GPU** |
 | `dflash-kquant.gguf` | 1.6 GB | Muse Glimmer DFlash sidecar |
 | `mmproj-Qwen3.6-35B-A3B-BF16.gguf` | 862 MB | Qwen3.6 vision projector |
@@ -462,20 +493,3 @@ llama.cpp-next/                                     next-line llama.cpp
 | [SETUP.md](docs/SETUP.md) | 2026-05-27 | Installation and configuration guide |
 
 ---
-
-## GPU overdrive
-
-`enable-gpu-overdrive.sh` enables amdgpu OverDrive (PP_OVERDRIVE_MASK 0x4000) for
-fan curve and clock control on the RX 7900 XTX. Run with `sudo`:
-
-```bash
-sudo bash /home/addison-gambhir/Desktop/local_llm/enable-gpu-overdrive.sh
-# Then: sudo reboot
-```
-
-Verifies after reboot:
-
-```bash
-cat /sys/module/amdgpu/parameters/ppfeaturemask  # should show fff7ffff
-ls /sys/class/drm/card1/device/pp_od_clk_voltage  # should now exist
-```

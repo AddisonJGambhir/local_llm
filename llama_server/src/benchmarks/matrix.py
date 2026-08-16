@@ -37,9 +37,13 @@ BIN_VULKAN = (
 )
 
 # Target models (each a distinct downloaded GGUF — all are benchmarked).
-MODEL_35B_MTP_IQ4 = f"{MODELS_DIR}/Qwen3.6-35B-A3B-MTP-UD-IQ4_NL.gguf"  # MoE+MTP, IQ4_NL
+MODEL_35B_MTP_IQ4 = (
+    f"{MODELS_DIR}/Qwen3.6-35B-A3B-MTP-UD-IQ4_NL.gguf"  # MoE+MTP, IQ4_NL
+)
 MODEL_35B_MTP_Q4KM = f"{MODELS_DIR}/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"  # MoE+MTP, Q4_K_M
-MODEL_35B_MTP_Q8 = f"{MODELS_DIR}/Qwen3.6-35B-A3B-Q8_0.gguf"  # MoE+MTP, Q8_0 — current primary
+MODEL_35B_MTP_Q8 = (
+    f"{MODELS_DIR}/Qwen3.6-35B-A3B-Q8_0.gguf"  # MoE+MTP, Q8_0 — current primary
+)
 MODEL_35B_MOE = f"{MODELS_DIR}/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf"  # MoE plain, IQ4_NL
 MODEL_27B_MTP = f"{MODELS_DIR}/Qwen3.6-27B-MTP-Q4_K_M.gguf"  # dense+MTP, Q4_K_M
 MODEL_27B = f"{MODELS_DIR}/Qwen3.6-27B-IQ4_NL.gguf"  # dense plain, IQ4_NL
@@ -59,26 +63,96 @@ CONFIGS = [
     # ══ GGUF: Qwen3.6-35B-A3B-MTP-UD-IQ4_NL  (MoE + MTP heads, IQ4_NL) ══════════
     ("MoE/IQ4(mtp) base q8_0", MODEL_35B_MTP_IQ4, "q8_0", "none", BIN_MAINLINE, "rocm"),
     ("MoE/IQ4(mtp) +MTP q8_0", MODEL_35B_MTP_IQ4, "q8_0", "mtp", BIN_MAINLINE, "rocm"),
-    ("MoE/IQ4(mtp) base q8_0 (vk)", MODEL_35B_MTP_IQ4, "q8_0", "none", BIN_VULKAN, "vulkan"),
-    ("MoE/IQ4(mtp) +MTP q8_0 (vk)", MODEL_35B_MTP_IQ4, "q8_0", "mtp", BIN_VULKAN, "vulkan"),
+    (
+        "MoE/IQ4(mtp) base q8_0 (vk)",
+        MODEL_35B_MTP_IQ4,
+        "q8_0",
+        "none",
+        BIN_VULKAN,
+        "vulkan",
+    ),
+    (
+        "MoE/IQ4(mtp) +MTP q8_0 (vk)",
+        MODEL_35B_MTP_IQ4,
+        "q8_0",
+        "mtp",
+        BIN_VULKAN,
+        "vulkan",
+    ),
     # ══ GGUF: Qwen3.6-35B-A3B-UD-Q4_K_M  (MoE + MTP heads, Q4_K_M) ══════════════
-    ("MoE/Q4KM(mtp) base q8_0", MODEL_35B_MTP_Q4KM, "q8_0", "none", BIN_MAINLINE, "rocm"),
-    ("MoE/Q4KM(mtp) +MTP q8_0", MODEL_35B_MTP_Q4KM, "q8_0", "mtp", BIN_MAINLINE, "rocm"),
-    ("MoE/Q4KM(mtp) base q8_0 (vk)", MODEL_35B_MTP_Q4KM, "q8_0", "none", BIN_VULKAN, "vulkan"),
-    ("MoE/Q4KM(mtp) +MTP q8_0 (vk)", MODEL_35B_MTP_Q4KM, "q8_0", "mtp", BIN_VULKAN, "vulkan"),
+    (
+        "MoE/Q4KM(mtp) base q8_0",
+        MODEL_35B_MTP_Q4KM,
+        "q8_0",
+        "none",
+        BIN_MAINLINE,
+        "rocm",
+    ),
+    (
+        "MoE/Q4KM(mtp) +MTP q8_0",
+        MODEL_35B_MTP_Q4KM,
+        "q8_0",
+        "mtp",
+        BIN_MAINLINE,
+        "rocm",
+    ),
+    (
+        "MoE/Q4KM(mtp) base q8_0 (vk)",
+        MODEL_35B_MTP_Q4KM,
+        "q8_0",
+        "none",
+        BIN_VULKAN,
+        "vulkan",
+    ),
+    (
+        "MoE/Q4KM(mtp) +MTP q8_0 (vk)",
+        MODEL_35B_MTP_Q4KM,
+        "q8_0",
+        "mtp",
+        BIN_VULKAN,
+        "vulkan",
+    ),
     # ══ GGUF: Qwen3.6-35B-A3B-Q8_0  (MoE + MTP heads, Q8_0 — current primary) ═══
     ("MoE/Q8(mtp) base q8_0", MODEL_35B_MTP_Q8, "q8_0", "none", BIN_MAINLINE, "rocm"),
     ("MoE/Q8(mtp) +MTP q8_0", MODEL_35B_MTP_Q8, "q8_0", "mtp", BIN_MAINLINE, "rocm"),
-    ("MoE/Q8(mtp) base q8_0 (vk)", MODEL_35B_MTP_Q8, "q8_0", "none", BIN_VULKAN, "vulkan"),
-    ("MoE/Q8(mtp) +MTP q8_0 (vk)", MODEL_35B_MTP_Q8, "q8_0", "mtp", BIN_VULKAN, "vulkan"),
+    (
+        "MoE/Q8(mtp) base q8_0 (vk)",
+        MODEL_35B_MTP_Q8,
+        "q8_0",
+        "none",
+        BIN_VULKAN,
+        "vulkan",
+    ),
+    (
+        "MoE/Q8(mtp) +MTP q8_0 (vk)",
+        MODEL_35B_MTP_Q8,
+        "q8_0",
+        "mtp",
+        BIN_VULKAN,
+        "vulkan",
+    ),
     # ══ GGUF: Qwen3.6-35B-A3B-UD-IQ4_NL  (MoE plain — base only) ════════════════
     ("MoE/IQ4 base q8_0", MODEL_35B_MOE, "q8_0", "none", BIN_MAINLINE, "rocm"),
     ("MoE/IQ4 base q8_0 (vk)", MODEL_35B_MOE, "q8_0", "none", BIN_VULKAN, "vulkan"),
     # ══ GGUF: Qwen3.6-27B-MTP-Q4_K_M  (dense + MTP heads, Q4_K_M) ═══════════════
     ("27B/Q4KM(mtp) base q8_0", MODEL_27B_MTP, "q8_0", "none", BIN_MAINLINE, "rocm"),
     ("27B/Q4KM(mtp) +MTP q8_0", MODEL_27B_MTP, "q8_0", "mtp", BIN_MAINLINE, "rocm"),
-    ("27B/Q4KM(mtp) base q8_0 (vk)", MODEL_27B_MTP, "q8_0", "none", BIN_VULKAN, "vulkan"),
-    ("27B/Q4KM(mtp) +MTP q8_0 (vk)", MODEL_27B_MTP, "q8_0", "mtp", BIN_VULKAN, "vulkan"),
+    (
+        "27B/Q4KM(mtp) base q8_0 (vk)",
+        MODEL_27B_MTP,
+        "q8_0",
+        "none",
+        BIN_VULKAN,
+        "vulkan",
+    ),
+    (
+        "27B/Q4KM(mtp) +MTP q8_0 (vk)",
+        MODEL_27B_MTP,
+        "q8_0",
+        "mtp",
+        BIN_VULKAN,
+        "vulkan",
+    ),
     # ══ GGUF: Qwen3.6-27B-IQ4_NL  (dense plain — base only) ═════════════════════
     ("27B/IQ4 base q8_0", MODEL_27B, "q8_0", "none", BIN_MAINLINE, "rocm"),
     ("27B/IQ4 base q8_0 (vk)", MODEL_27B, "q8_0", "none", BIN_VULKAN, "vulkan"),
@@ -594,7 +668,11 @@ def main():
                 print(
                     f"\n[{i + 1}/{len(configs)}] SKIP {label} — model missing: {model_path}"
                 )
-                record(na_row(model, label, quant, spec, backend, args.ctx_k, "model_missing"))
+                record(
+                    na_row(
+                        model, label, quant, spec, backend, args.ctx_k, "model_missing"
+                    )
+                )
                 continue
             if spec == "dflash":
                 drafter = default_drafter_for_model(model_path)
@@ -603,7 +681,15 @@ def main():
                         f"\n[{i + 1}/{len(configs)}] SKIP {label} — drafter missing: {drafter}"
                     )
                     record(
-                        na_row(model, label, quant, spec, backend, args.ctx_k, "draft_missing")
+                        na_row(
+                            model,
+                            label,
+                            quant,
+                            spec,
+                            backend,
+                            args.ctx_k,
+                            "draft_missing",
+                        )
                     )
                     continue
             if not os.path.isfile(binary) or not os.access(binary, os.X_OK):
@@ -611,7 +697,9 @@ def main():
                     f"\n[{i + 1}/{len(configs)}] SKIP {label} — binary missing/not executable: {binary}"
                 )
                 record(
-                    na_row(model, label, quant, spec, backend, args.ctx_k, "binary_missing")
+                    na_row(
+                        model, label, quant, spec, backend, args.ctx_k, "binary_missing"
+                    )
                 )
                 continue
             if not port_is_available(args.port):

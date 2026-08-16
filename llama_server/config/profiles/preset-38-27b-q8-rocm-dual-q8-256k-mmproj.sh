@@ -62,7 +62,7 @@ export HIP_VISIBLE_DEVICES=0,1
 # the card that was at ~95% full. Text pp/tg are unaffected (1084 vs 1086).
 export MTMD_BACKEND_DEVICE=ROCm1
 
-PROFILE_NAME="preset-38-27b-q8-mtp-rocm-dual-q8-256k-mmproj"
+PROFILE_NAME="preset-38-27b-q8-mtp-rocm-dual-f16-256k-mmproj"
 LLAMA_BINARY="$LLM_ROOT/llama.cpp/build/bin/llama-server"
 LLAMA_MODEL="$LLAMA_SERVER_ROOT/models/Qwen3.8-27B-Q8_0.gguf"
 LLAMA_BACKEND="rocm"

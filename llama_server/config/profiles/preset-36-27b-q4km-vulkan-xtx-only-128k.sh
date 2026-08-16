@@ -31,7 +31,7 @@
 
 source "$LLAMA_SERVER_ROOT/config/profiles/default.sh"
 
-PROFILE_NAME="preset-36-27b-q4km-vulkan-xtx-only-128k"
+PROFILE_NAME="preset-36-27b-q4km-vulkan-xtx-only-q8-128k"
 LLAMA_BINARY="$LLM_ROOT/llama.cpp/build-vulkan/bin/llama-server"
 LLAMA_MODEL="$LLAMA_SERVER_ROOT/models/Qwen3.6-27B-MTP-Q4_K_M.gguf"
 LLAMA_BACKEND="vulkan"

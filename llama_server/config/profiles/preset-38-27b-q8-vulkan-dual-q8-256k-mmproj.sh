@@ -10,7 +10,7 @@ source "$LLAMA_SERVER_ROOT/config/profiles/default.sh"
 # plus the whole ~0.9 GiB vision transient, at zero text pp/tg cost.
 export MTMD_BACKEND_DEVICE=Vulkan1
 
-PROFILE_NAME="preset-38-27b-q8-mtp-vulkan-dual-q8-256k-mmproj"
+PROFILE_NAME="preset-38-27b-q8-mtp-vulkan-dual-f16-256k-mmproj"
 LLAMA_BINARY="$LLM_ROOT/llama.cpp/build-vulkan/bin/llama-server"
 LLAMA_MODEL="$LLAMA_SERVER_ROOT/models/Qwen3.8-27B-Q8_0.gguf"
 LLAMA_BACKEND="vulkan"

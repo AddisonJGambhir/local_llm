@@ -45,7 +45,10 @@ import matrix  # noqa: E402  (sibling module; reuse its proven helpers)
 # ── The sweep: production MTP GGUFs x speculation depth ────────────────────────
 # The MTP models currently downloaded that fit the single-GPU Vulkan path.
 MODELS = [
-    ("Qwen3.6-35B-A3B-Q8_0", matrix.MODEL_35B_MTP_Q8),  # MoE+MTP, Q8_0 — current primary
+    (
+        "Qwen3.6-35B-A3B-Q8_0",
+        matrix.MODEL_35B_MTP_Q8,
+    ),  # MoE+MTP, Q8_0 — current primary
     ("Qwen3.6-27B-MTP-Q4_K_M", matrix.MODEL_27B_MTP),  # dense+MTP, Q4_K_M
 ]
 DEFAULT_N_MAX = [2, 3, 4, 5, 6]
@@ -66,34 +69,60 @@ ACCEPT_RE = re.compile(
 
 # ── Server command: the production Vulkan MTP path, only n_max (+adaptive) vary ─
 def build_server_cmd(
-    model_path: str, ctx_size: int, port: int, ubatch_size: int, n_max: int, adaptive: bool
+    model_path: str,
+    ctx_size: int,
+    port: int,
+    ubatch_size: int,
+    n_max: int,
+    adaptive: bool,
 ) -> list[str]:
     physical_cores = matrix.physical_core_count()
     logical_threads = os.cpu_count() or physical_cores * 2
     cmd = [
         matrix.BIN_VULKAN,
-        "-m", model_path,
-        "--alias", "local",
-        "--device", "Vulkan0",
-        "-ngl", "99",
-        "-c", str(ctx_size),
-        "-t", str(physical_cores),
-        "-tb", str(logical_threads),
-        "--parallel", "1",
-        "--cache-type-k", "q8_0",
-        "--cache-type-v", "q8_0",
-        "--flash-attn", "on",
-        "--ubatch-size", str(ubatch_size),
+        "-m",
+        model_path,
+        "--alias",
+        "local",
+        "--device",
+        "Vulkan0",
+        "-ngl",
+        "99",
+        "-c",
+        str(ctx_size),
+        "-t",
+        str(physical_cores),
+        "-tb",
+        str(logical_threads),
+        "--parallel",
+        "1",
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q8_0",
+        "--flash-attn",
+        "on",
+        "--ubatch-size",
+        str(ubatch_size),
         "--no-context-shift",
-        "--spec-type", "draft-mtp",
-        "--spec-draft-n-max", str(n_max),
-        "--spec-draft-p-min", "0.0",
-        "--spec-draft-type-k", "q8_0",
-        "--spec-draft-type-v", "q8_0",
-        "--timeout", "0",
-        "--port", str(port),
-        "--host", "127.0.0.1",
-        "--log-colors", "off",
+        "--spec-type",
+        "draft-mtp",
+        "--spec-draft-n-max",
+        str(n_max),
+        "--spec-draft-p-min",
+        "0.0",
+        "--spec-draft-type-k",
+        "q8_0",
+        "--spec-draft-type-v",
+        "q8_0",
+        "--timeout",
+        "0",
+        "--port",
+        str(port),
+        "--host",
+        "127.0.0.1",
+        "--log-colors",
+        "off",
     ]
     if adaptive:
         # Enable mainline's adaptive-p controller (off by default; production
@@ -200,7 +229,13 @@ CSV_FIELDS = [
 
 
 def result_row(
-    model: str, n_max: int, adaptive: bool, ctx_k: int, vram: str, agg: dict | None, status: str
+    model: str,
+    n_max: int,
+    adaptive: bool,
+    ctx_k: int,
+    vram: str,
+    agg: dict | None,
+    status: str,
 ) -> dict:
     return {
         "model": model,
@@ -216,8 +251,12 @@ def result_row(
         "encode": f"{agg['encode']:.1f}" if agg else "N/A",
         "decode": f"{agg['decode']:.1f}" if agg else "N/A",
         "decode_std": f"{agg['decode_std']:.1f}" if agg else "N/A",
-        "accept": f"{agg['accept']:.4f}" if agg and agg["accept"] is not None else "N/A",
-        "accept_std": f"{agg['accept_std']:.4f}" if agg and agg["accept"] is not None else "N/A",
+        "accept": f"{agg['accept']:.4f}"
+        if agg and agg["accept"] is not None
+        else "N/A",
+        "accept_std": f"{agg['accept_std']:.4f}"
+        if agg and agg["accept"] is not None
+        else "N/A",
         "status": status,
     }
 
@@ -239,7 +278,9 @@ def append_csv(output_csv: Path, row: dict):
 
 def default_output_path() -> Path:
     stamp = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
-    run_dir = Path(matrix.LLAMA_SERVER_DIR) / "output" / "benchmarks" / f"spec-depth-{stamp}"
+    run_dir = (
+        Path(matrix.LLAMA_SERVER_DIR) / "output" / "benchmarks" / f"spec-depth-{stamp}"
+    )
     return run_dir / f"spec-depth-{stamp}.csv"
 
 
@@ -255,37 +296,57 @@ def parse_n_max(spec: str) -> list[int]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--ctx-k", type=int, default=DEFAULT_CTX_K)
     parser.add_argument(
-        "--n-max", default=",".join(map(str, DEFAULT_N_MAX)),
+        "--n-max",
+        default=",".join(map(str, DEFAULT_N_MAX)),
         help="comma list of speculation depths to sweep (default 2,3,4,5,6)",
     )
     parser.add_argument(
-        "--repeats", type=int, default=DEFAULT_REPEATS,
+        "--repeats",
+        type=int,
+        default=DEFAULT_REPEATS,
         help="timed runs per config, averaged with stdev (default 1; use 5 to beat noise)",
     )
     parser.add_argument(
-        "--adaptive", action=argparse.BooleanOptionalAction, default=False,
+        "--adaptive",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help="enable mainline's adaptive-p controller (--adaptive-target 0.9). "
         "Default is OFF: depth pinned at n_max, matching the production server. "
         "--adaptive measures whether adaptive-p beats a pinned depth.",
     )
     parser.add_argument(
-        "--decode-tokens", type=int, default=DEFAULT_DECODE_TOKENS,
+        "--decode-tokens",
+        type=int,
+        default=DEFAULT_DECODE_TOKENS,
         help=f"tokens generated per timed run (default {DEFAULT_DECODE_TOKENS})",
     )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--ubatch-size", type=int, default=DEFAULT_UBATCH)
     parser.add_argument("--startup-timeout", type=int, default=DEFAULT_HEALTH_WAIT)
-    parser.add_argument("--min-free-vram-gib", type=float, default=DEFAULT_MIN_FREE_VRAM_GIB)
+    parser.add_argument(
+        "--min-free-vram-gib", type=float, default=DEFAULT_MIN_FREE_VRAM_GIB
+    )
     parser.add_argument("--settle-seconds", type=float, default=8.0)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--list", action="store_true", help="list selected runs")
-    parser.add_argument("--dry-run", action="store_true", help="validate and print commands only")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="validate and print commands only"
+    )
     args = parser.parse_args()
 
-    for name in ("ctx_k", "port", "ubatch_size", "decode_tokens", "startup_timeout", "repeats"):
+    for name in (
+        "ctx_k",
+        "port",
+        "ubatch_size",
+        "decode_tokens",
+        "startup_timeout",
+        "repeats",
+    ):
         if getattr(args, name) <= 0:
             parser.error(f"--{name.replace('_', '-')} must be positive")
     if not 1 <= args.port <= 65535:
@@ -320,7 +381,9 @@ def main():
                 matrix.BIN_VULKAN, os.X_OK
             ):
                 problems.append("binary missing/not executable")
-            cmd = build_server_cmd(path, ctx_size, args.port, args.ubatch_size, n, args.adaptive)
+            cmd = build_server_cmd(
+                path, ctx_size, args.port, args.ubatch_size, n, args.adaptive
+            )
             print(f"\n{name}  n_max={n}  {'; '.join(problems) if problems else 'OK'}")
             print("  " + " ".join(subprocess.list2cmdline([part]) for part in cmd))
         return
@@ -344,7 +407,9 @@ def main():
         append_csv(output_csv, row)
 
     print("=" * 70)
-    print(f"  MTP spec-depth sweep — {len(runs)} runs @ {args.ctx_k}k ctx [vulkan, q8_0 KV]")
+    print(
+        f"  MTP spec-depth sweep — {len(runs)} runs @ {args.ctx_k}k ctx [vulkan, q8_0 KV]"
+    )
     print(
         f"  n_max: {args.n_max_values}   adaptive: {'on' if args.adaptive else 'off (depth pinned)'}"
         f"   {args.decode_tokens}-tok gen x {args.repeats}"
@@ -370,20 +435,26 @@ def main():
         for i, (name, model_path, n_max) in enumerate(runs):
             tag = f"{name}  n_max={n_max}"
             if not os.path.isfile(model_path):
-                print(f"\n[{i + 1}/{len(runs)}] SKIP {tag} — model missing: {model_path}")
+                print(
+                    f"\n[{i + 1}/{len(runs)}] SKIP {tag} — model missing: {model_path}"
+                )
                 record(na_row(name, n_max, args.adaptive, args.ctx_k, "model_missing"))
                 continue
             if not os.path.isfile(matrix.BIN_VULKAN) or not os.access(
                 matrix.BIN_VULKAN, os.X_OK
             ):
-                print(f"\n[{i + 1}/{len(runs)}] SKIP {tag} — binary missing/not executable")
+                print(
+                    f"\n[{i + 1}/{len(runs)}] SKIP {tag} — binary missing/not executable"
+                )
                 record(na_row(name, n_max, args.adaptive, args.ctx_k, "binary_missing"))
                 continue
             if not matrix.port_is_available(args.port):
                 raise RuntimeError(f"benchmark port {args.port} became occupied")
 
             print(f"\n[{i + 1}/{len(runs)}] {tag}  [vulkan]")
-            cmd = build_server_cmd(model_path, ctx_size, args.port, args.ubatch_size, n_max, args.adaptive)
+            cmd = build_server_cmd(
+                model_path, ctx_size, args.port, args.ubatch_size, n_max, args.adaptive
+            )
 
             env = os.environ.copy()
             env.pop("HIP_VISIBLE_DEVICES", None)  # Vulkan path
@@ -391,15 +462,25 @@ def main():
             log_path = logs_dir / f"{i + 1:02d}-{name}-nmax{n_max}.log"
             active_log = log_path.open("w", encoding="utf-8")
             active_proc = subprocess.Popen(
-                cmd, stdout=active_log, stderr=subprocess.STDOUT, env=env, start_new_session=True
+                cmd,
+                stdout=active_log,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=True,
             )
 
-            print(f"  server log: {log_path} — waiting for /health (up to {args.startup_timeout}s)...")
+            print(
+                f"  server log: {log_path} — waiting for /health (up to {args.startup_timeout}s)..."
+            )
             ready = matrix.wait_for_health(args.port, args.startup_timeout, active_proc)
             if not ready:
                 active_log.flush()
                 exit_code = active_proc.poll()
-                status = f"failed(exit={exit_code})" if exit_code is not None else "startup_timeout"
+                status = (
+                    f"failed(exit={exit_code})"
+                    if exit_code is not None
+                    else "startup_timeout"
+                )
                 print(f"  [FAILED] {status} — last log lines:")
                 matrix.tail_log(log_path)
                 matrix.terminate_process(active_proc)
@@ -418,7 +499,11 @@ def main():
                     if active_proc.poll() is not None:
                         break
                     m = measure_once(
-                        args.port, prompt, args.decode_tokens, log_path, f"run {r + 1}/{args.repeats}"
+                        args.port,
+                        prompt,
+                        args.decode_tokens,
+                        log_path,
+                        f"run {r + 1}/{args.repeats}",
                     )
                     if m is not None:
                         samples.append(m)
@@ -435,9 +520,15 @@ def main():
                 status = "ok"
 
             if agg:
-                acc = f"  accept {agg['accept']:.3f}" if agg["accept"] is not None else ""
-                print(f"  => decode {agg['decode']:.1f} ±{agg['decode_std']:.1f} t/s{acc}")
-            record(result_row(name, n_max, args.adaptive, args.ctx_k, vram, agg, status))
+                acc = (
+                    f"  accept {agg['accept']:.3f}" if agg["accept"] is not None else ""
+                )
+                print(
+                    f"  => decode {agg['decode']:.1f} ±{agg['decode_std']:.1f} t/s{acc}"
+                )
+            record(
+                result_row(name, n_max, args.adaptive, args.ctx_k, vram, agg, status)
+            )
 
             matrix.terminate_process(active_proc)
             active_log.close()
@@ -445,7 +536,9 @@ def main():
             print("  server stopped.")
             time.sleep(args.settle_seconds)
     except KeyboardInterrupt:
-        print("\nInterrupted; cleaning up the benchmark-owned server...", file=sys.stderr)
+        print(
+            "\nInterrupted; cleaning up the benchmark-owned server...", file=sys.stderr
+        )
         raise
     finally:
         if active_proc is not None:
@@ -467,7 +560,9 @@ def main():
             f"{row['accept']:>7}  {row['status']}"
         )
     print("=" * 96)
-    print("  Decode t/s is the headline; ±std is over --repeats runs; accept = drafts accepted/generated.")
+    print(
+        "  Decode t/s is the headline; ±std is over --repeats runs; accept = drafts accepted/generated."
+    )
     print(f"\n  Results saved to {output_csv} ({len(results)} rows)")
 
 

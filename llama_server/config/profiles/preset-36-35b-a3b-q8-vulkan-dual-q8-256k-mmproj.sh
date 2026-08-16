@@ -43,7 +43,7 @@ export HIP_VISIBLE_DEVICES=0,1
 # and otherwise picks the FIRST GPU, which is the constrained 24 GiB XTX.
 export MTMD_BACKEND_DEVICE=Vulkan1
 
-PROFILE_NAME="preset-36-35b-a3b-q8-mtp-vulkan-dual-q8-256k-mmproj"
+PROFILE_NAME="preset-36-35b-a3b-q8-mtp-vulkan-dual-f16-256k-mmproj"
 LLAMA_BINARY="$LLM_ROOT/llama.cpp/build-vulkan/bin/llama-server"
 LLAMA_MODEL="$LLAMA_SERVER_ROOT/models/Qwen3.6-35B-A3B-Q8_0.gguf"
 LLAMA_BACKEND="vulkan"
