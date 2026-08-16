@@ -1,0 +1,39 @@
+config,ctx_k,backend,quant,spec,vram,short_encode,short_decode,long_encode,long_decode,status
+MoE  turbo3,128,rocm,turbo3,none,20.2 GiB,389.5,84.9,535.1,84.4,ok
+MoE  turbo4,128,rocm,turbo4,none,20.4 GiB,383.7,85.4,510.1,84.7,ok
+MoE  q8_0,128,rocm,q8_0,none,21.1 GiB,383.1,92.2,511.2,92.1,ok
+MoE  kvarn5/4,128,rocm,kvarn5/kvarn4,none,20.5 GiB,373.3,95.4,654.8,94.9,ok
+MoE  kvarn4/2,128,rocm,kvarn4/kvarn2,none,20.3 GiB,378.2,95.4,652.8,94.2,ok
+MoE+MTP  q8_0,128,rocm,q8_0,mtp,22.6 GiB,308.5,138.1,469.3,120.6,ok
+MoE+MTP  kvarn5/4,128,rocm,kvarn5/kvarn4,mtp,21.6 GiB,349.7,161.4,614.1,134.1,ok
+MoE+MTP  kvarn4/2,128,rocm,kvarn4/kvarn2,mtp,21.4 GiB,345.6,159.7,623.1,135.4,ok
+MoE+DFlash  q8_0,128,rocm,q8_0,dflash,21.5 GiB,221.5,112.8,477.9,104.2,ok
+MoE+DFlash  kvarn5/4,128,rocm,kvarn5/kvarn4,dflash,20.9 GiB,215.0,108.5,471.9,107.4,ok
+MoE+DFlash  kvarn4/2,128,rocm,kvarn4/kvarn2,dflash,20.6 GiB,212.4,108.2,471.3,107.1,ok
+27B  turbo3,128,rocm,turbo3,none,19.3 GiB,201.2,36.4,290.7,33.1,ok
+27B  turbo4,128,rocm,turbo4,none,19.8 GiB,201.2,36.7,287.7,33.6,ok
+27B  q8_0,128,rocm,q8_0,none,22.1 GiB,198.0,37.5,276.1,34.9,ok
+27B  kvarn5/4,128,rocm,kvarn5/kvarn4,none,20.4 GiB,161.8,37.8,344.0,35.5,ok
+27B  kvarn4/2,128,rocm,kvarn4/kvarn2,none,19.7 GiB,162.7,38.4,348.1,35.7,ok
+27B+MTP  q8_0,128,rocm,q8_0,mtp,23.6 GiB,151.6,50.9,272.4,44.7,ok
+27B+MTP  kvarn5/4,128,rocm,kvarn5/kvarn4,mtp,21.6 GiB,127.4,53.4,434.1,50.8,ok
+27B+MTP  kvarn4/2,128,rocm,kvarn4/kvarn2,mtp,20.9 GiB,129.3,53.5,426.9,51.0,ok
+27B+DFlash  q8_0,128,rocm,q8_0,dflash,22.6 GiB,158.9,50.1,290.1,80.4,ok
+27B+DFlash  kvarn5/4,128,rocm,kvarn5/kvarn4,dflash,20.8 GiB,159.3,49.8,293.3,77.4,ok
+27B+DFlash  kvarn4/2,128,rocm,kvarn4/kvarn2,dflash,20.0 GiB,159.9,51.2,294.2,82.3,ok
+MoE  q8_0  (vulkan),128,vulkan,q8_0,none,19.8 GiB,277.4,148.7,563.9,138.9,ok
+MoE  q5_0  (vulkan),128,vulkan,q5_0,none,19.4 GiB,283.4,148.9,570.4,139.1,ok
+MoE  q4_0  (vulkan),128,vulkan,q4_0,none,19.2 GiB,281.7,144.8,566.2,139.6,ok
+27B  q8_0  (vulkan),128,vulkan,q8_0,none,20.6 GiB,146.5,44.4,253.4,40.8,ok
+27B  q5_0  (vulkan),128,vulkan,q5_0,none,19.1 GiB,146.4,44.2,254.0,40.6,ok
+27B  q4_0  (vulkan),128,vulkan,q4_0,none,18.6 GiB,145.6,44.3,253.2,40.8,ok
+MoE  kvarn5/4 (vulkan),128,vulkan,kvarn5/kvarn4,none,19.2 GiB,409.3,151.1,712.3,141.5,ok
+MoE  kvarn4/2 (vulkan),128,vulkan,kvarn4/kvarn2,none,18.9 GiB,405.4,150.6,710.0,141.5,ok
+27B  kvarn5/4 (vulkan),128,vulkan,kvarn5/kvarn4,none,19.2 GiB,233.9,44.3,315.7,40.9,ok
+27B  kvarn4/2 (vulkan),128,vulkan,kvarn4/kvarn2,none,18.5 GiB,234.1,44.2,315.5,40.9,ok
+MoE+MTP  q8_0   (vulkan),128,vulkan,q8_0,mtp,20.3 GiB,363.5,242.1,667.7,217.2,ok
+MoE+MTP  kvarn5/4 (vulkan),128,vulkan,kvarn5/kvarn4,mtp,20.2 GiB,392.2,243.5,661.1,209.6,ok
+MoE+MTP  kvarn4/2 (vulkan),128,vulkan,kvarn4/kvarn2,mtp,19.9 GiB,395.2,243.5,660.9,209.9,ok
+27B+MTP  q8_0   (vulkan),128,vulkan,q8_0,mtp,22.4 GiB,216.9,93.7,308.1,96.3,ok
+27B+MTP  kvarn5/4 (vulkan),128,vulkan,kvarn5/kvarn4,mtp,21.2 GiB,217.6,93.4,305.2,96.3,ok
+27B+MTP  kvarn4/2 (vulkan),128,vulkan,kvarn4/kvarn2,mtp,20.5 GiB,219.2,92.1,300.6,94.1,ok

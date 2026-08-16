@@ -1,0 +1,2 @@
+model,kv,mtp,max_fit_ctx_k,first_spill_ctx_k,proc_vram_gib_at_max,proc_gtt_gib_at_max,vram_free_gib_at_max,note
+Qwen3.6-35B-A3B-UD-Q4_K_M,q5_1,True,96,104,21.49,0.30,0.07,"fits to ~96k, spills by 104k"

@@ -1,0 +1,9 @@
+use_default_settings: true
+server:
+  secret_key: "local-searxng-secret-key-1234567890"
+  limiter: false
+  image_proxy: true
+search:
+  formats:
+    - html
+    - json

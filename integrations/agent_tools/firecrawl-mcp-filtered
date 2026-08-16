@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""
+stdio MCP passthrough for firecrawl-mcp that hides tools whose JSON Schema breaks
+llama.cpp's grammar compiler.
+
+Why this exists
+---------------
+llama.cpp builds ONE GBNF grammar from every tool definition in a request, before
+generating a single token. `firecrawl_feedback` and `firecrawl_search_feedback`
+each nest an array of objects containing a long string (missingContent[].description,
+2000-4000 chars). The array repetition multiplies against the string repetition and
+trips MAX_REPETITION_THRESHOLD (2000) in src/llama-grammar.cpp:494, so the server
+answers ANY request -- even "hello" -- with:
+
+    Failed to initialize samplers: failed to parse grammar
+
+Verified 2026-08-11: each of those two tools triggers it ALONE, on both Muse Glimmer
+and Qwen3.6-35B-A3B, i.e. it is model- and backend-independent. The other 24 firecrawl
+tools load fine together. Neither hidden tool is a real loss: firecrawl_search_feedback
+returns 503 DB_DISABLED on this self-hosted deployment, and firecrawl_feedback only
+submits quality ratings for a previous job.
+
+A wrapper is used rather than patching node_modules/firecrawl-mcp/dist/index.js so the
+fix survives `npm update` and applies to every client (opencode, kilo, hermes).
+
+Override the list with FIRECRAWL_BLOCKED_TOOLS="a,b" (empty string disables filtering).
+"""
+import json
+import os
+import subprocess
+import sys
+import threading
+
+DEFAULT_BLOCKED = "firecrawl_feedback,firecrawl_search_feedback"
+BLOCKED = {
+    t.strip()
+    for t in os.environ.get("FIRECRAWL_BLOCKED_TOOLS", DEFAULT_BLOCKED).split(",")
+    if t.strip()
+}
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REAL = os.environ.get(
+    "FIRECRAWL_MCP_BIN", os.path.join(HERE, "node_modules", ".bin", "firecrawl-mcp")
+)
+
+
+def main() -> int:
+    child = subprocess.Popen(
+        [REAL, *sys.argv[1:]],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=None,          # let the child's stderr reach the host untouched
+        text=True,
+        bufsize=1,
+    )
+
+    def pump_stdin() -> None:
+        try:
+            for line in sys.stdin:
+                child.stdin.write(line)
+                child.stdin.flush()
+        except (BrokenPipeError, ValueError):
+            pass
+        finally:
+            try:
+                child.stdin.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=pump_stdin, daemon=True).start()
+
+    for line in child.stdout:
+        out = line
+        stripped = line.strip()
+        # Only touch well-formed tools/list results; everything else passes through
+        # byte-for-byte so we never corrupt the protocol.
+        if BLOCKED and stripped.startswith("{"):
+            try:
+                msg = json.loads(stripped)
+                tools = msg.get("result", {}).get("tools")
+                if isinstance(tools, list):
+                    kept = [t for t in tools if t.get("name") not in BLOCKED]
+                    if len(kept) != len(tools):
+                        msg["result"]["tools"] = kept
+                        out = json.dumps(msg) + "\n"
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                pass
+        sys.stdout.write(out)
+        sys.stdout.flush()
+
+    return child.wait()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

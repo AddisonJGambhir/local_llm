@@ -1,0 +1,30 @@
+# llama.cpp clones — upstream repos, re-clonable (each carries its own .git)
+/llama.cpp*/
+
+# model weights (100s of GB, downloadable)
+llama_server/models/*.gguf
+llama_server/models/*.bin
+llama_server/models/.cache/
+
+# python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# node
+node_modules/
+
+# vendored upstream clones (re-clonable; keep out of versioning)
+integrations/firecrawl/
+integrations/pi-emote/
+
+# agent state
+.kilo/
+.qwen/
+
+# logs & runtime state
+*.log
+
+# OS cruft
+.DS_Store

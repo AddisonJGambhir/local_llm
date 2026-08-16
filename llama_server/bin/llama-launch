@@ -1,0 +1,358 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LLAMA_SERVER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LLM_ROOT="$(cd "$LLAMA_SERVER_ROOT/.." && pwd)"
+MODELS_DIR="$LLAMA_SERVER_ROOT/models"
+DEFAULT_PROFILE="$LLAMA_SERVER_ROOT/config/profiles/default.sh"
+STATE_HOME="${LLAMA_STATE_HOME:-${XDG_STATE_HOME:-$HOME/.local/state}/local-llm}"
+GENERATED_PROFILE="$STATE_HOME/interactive-profile.sh"
+ACTION="restart"
+
+case "${1:-}" in
+    "")
+        ;;
+    --dry-run)
+        ACTION="command"
+        ;;
+    -h|--help)
+        echo "Usage: $0 [--dry-run]"
+        exit 0
+        ;;
+    *)
+        echo "Unknown argument: $1" >&2
+        exit 2
+        ;;
+esac
+
+BIN_MAINLINE="$LLM_ROOT/llama.cpp/build/bin/llama-server"
+BIN_VULKAN="$LLM_ROOT/llama.cpp/build-vulkan/bin/llama-server"
+BIN_BEELLAMA_032="$LLM_ROOT/llama.cpp-beellama-032-hip/build/bin/llama-server"
+BIN_BEELLAMA_VULKAN="$LLM_ROOT/llama.cpp-beellama-032-hip/build-vulkan/bin/llama-server"
+
+prompt_choice() {
+    local prompt="$1" value
+    read -r -p "$prompt" value
+    printf '%s\n' "$value"
+}
+
+prepare_profile_output() {
+    mkdir -p "$STATE_HOME"
+
+    # A dry-run must NOT clobber the canonical interactive-profile.sh: a running
+    # server's status/logs/restart commands read it.
+    if [[ "$ACTION" == "command" ]]; then
+        PROFILE_OUT="$(mktemp "$STATE_HOME/interactive-profile.dryrun.XXXXXX")"
+    else
+        PROFILE_OUT="$GENERATED_PROFILE"
+    fi
+    TEMP_PROFILE="$PROFILE_OUT.$$"
+}
+
+run_profile() {
+    echo
+    echo "Generated profile: $PROFILE_OUT"
+
+    if [[ "$ACTION" == "command" ]]; then
+        local status=0
+        "$SCRIPT_DIR/llamactl" command --profile "$PROFILE_OUT" || status=$?
+        rm -f "$PROFILE_OUT"
+        return "$status"
+    fi
+
+    if ! "$SCRIPT_DIR/llamactl" restart --profile "$PROFILE_OUT"; then
+        return 1
+    fi
+
+    echo
+    echo "── following live server log ── Ctrl-C detaches (server keeps running; 'llamakill' to stop) ──"
+    exec "$SCRIPT_DIR/llamactl" logs
+}
+
+echo "Launch mode:"
+echo "  1) ROCm"
+echo "  2) Vulkan"
+echo "  3) Presets ROCm"
+echo "  4) Presets Vulkan"
+BACKEND_CHOICE="$(prompt_choice "Selection (1/2/3/4): ")"
+case "$BACKEND_CHOICE" in
+    1) BACKEND="rocm" ;;
+    2) BACKEND="vulkan" ;;
+    3|4)
+        # One best-measured preset per model per backend, re-measured 2026-08-16
+        # on the dual-GPU (7900 XTX + R9700) topology with f16 KV throughout.
+        # Draft depth is NOT portable: it varies by model, by backend, AND by
+        # topology -- Muse Glimmer wanted n-max 15 on a single GPU and wants 2 on
+        # two, because spanning cards makes the verify pass expensive.
+        # tg figures come from a fixed-seed harness; treat DFlash decode numbers
+        # as +/-10% (DFlash is nondeterministic even at a fixed seed).
+        # See docs/TUNING_QUEUE.md for the full evidence and open items.
+        P="$LLAMA_SERVER_ROOT/config/profiles"
+        if [[ "$BACKEND_CHOICE" == "3" ]]; then
+            echo
+            echo "Presets — ROCm:"
+            echo "  1) Qwen 3.6 35B-A3B MoE Q8_0  vision  — MTP n2 — f16 — 256k  (2511 pp /  81.5 tg)"
+            echo "  2) Qwen 3.6 35B-A3B MoE Q8_0  text    — MTP n2 — f16 — 256k  (2538 pp /  83.2 tg)"
+            echo "  3) Qwen 3.8 27B dense  Q8_0   vision  — MTP n3 — f16 — 256k  ( 982 pp /  38.5 tg)"
+            echo "  4) Qwen 3.6 27B dense  Q4_K_M         — MTP n2 — f16 — 256k  (1408 pp /  36.9 tg, fastest prefill)"
+            echo "  5) Muse Glimmer 30B    Q8_0           — DFlash n2 — f16 — 128k  ( 986 pp /  33.2 tg)"
+            echo "  6) Muse Glimmer 30B    Q8_0   YaRN    — DFlash n2 — f16 — 256k  ( 891 pp /  34.1 tg, retrieval 3/3)"
+            echo "  7) Nemotron 3.5 30B-A3B Q8_0          — no spec  — f16 — 256k  (3034 pp /  94.6 tg)"
+            echo "  8) Nemotron 3.5 30B-A3B Q8_0  1M ctx  — no spec  — f16 —   1M  (2555 pp /  94.7 tg)"
+            PRESET_CHOICE="$(prompt_choice "Preset (1/2/3/4/5/6/7/8): ")"
+            case "$PRESET_CHOICE" in
+                1) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-rocm-dual-q8-256k-mmproj.sh" ;;
+                2) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-rocm-dual-256k-textonly.sh" ;;
+                3) PRESET_PROFILE="$P/preset-38-27b-q8-rocm-dual-q8-256k-mmproj.sh" ;;
+                4) PRESET_PROFILE="$P/preset-36-27b-q4km-rocm-dual-256k.sh" ;;
+                5) PRESET_PROFILE="$P/preset-muse-glimmer-30b-q8-rocm-dual-128k-dflash.sh" ;;
+                6) PRESET_PROFILE="$P/preset-muse-glimmer-30b-q8-rocm-dual-256k-yarn.sh" ;;
+                7) PRESET_PROFILE="$P/preset-nemotron35-30b-a3b-q8-rocm-dual-256k.sh" ;;
+                8) PRESET_PROFILE="$P/preset-nemotron35-30b-a3b-q8-rocm-dual-1m.sh" ;;
+                *) echo "Invalid preset selection." >&2; exit 2 ;;
+            esac
+        else
+            echo
+            echo "Presets — Vulkan:"
+            echo "  1) Qwen 3.6 35B-A3B MoE Q8_0  vision  — MTP n2 — f16 — 256k  (2072 pp /  93.7 tg, best decode)"
+            echo "  2) Qwen 3.6 35B-A3B MoE Q8_0  text    — MTP n2 — f16 — 256k  (2129 pp /  94.0 tg)"
+            echo "  3) Qwen 3.8 27B dense  Q8_0   vision  — MTP n3 — f16 — 256k  ( 825 pp /  35.0 tg)"
+            echo "  4) Qwen 3.6 27B dense  Q4_K_M         — MTP n2 — f16 — 256k  ( 801 pp /  46.6 tg)"
+            echo "  5) Muse Glimmer 30B    Q8_0           — DFlash n2 — f16 — 128k  ( 743 pp /  31.7 tg; prefer ROCm)"
+            echo "  6) Qwen 3.6 27B dense  Q4_K_M  XTX-ONLY — MTP n2 — q8_0 — 128k  ( 780 pp /  70.4 tg, best decode on box)"
+            PRESET_CHOICE="$(prompt_choice "Preset (1/2/3/4/5/6): ")"
+            case "$PRESET_CHOICE" in
+                1) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-vulkan-dual-q8-256k-mmproj.sh" ;;
+                2) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-vulkan-dual-256k-textonly.sh" ;;
+                3) PRESET_PROFILE="$P/preset-38-27b-q8-vulkan-dual-q8-256k-mmproj.sh" ;;
+                4) PRESET_PROFILE="$P/preset-36-27b-q4km-vulkan-dual-256k.sh" ;;
+                5) PRESET_PROFILE="$P/preset-muse-glimmer-30b-q8-vulkan-dual-128k-dflash.sh" ;;
+                6) PRESET_PROFILE="$P/preset-36-27b-q4km-vulkan-xtx-only-128k.sh" ;;
+                *) echo "Invalid preset selection." >&2; exit 2 ;;
+            esac
+        fi
+
+        prepare_profile_output
+        {
+            printf '# Generated by %s\n' "$0"
+            printf 'source %q\n' "$PRESET_PROFILE"
+        } > "$TEMP_PROFILE"
+        mv "$TEMP_PROFILE" "$PROFILE_OUT"
+        run_profile
+        exit $?
+        ;;
+    *) echo "Invalid launch-mode selection." >&2; exit 2 ;;
+esac
+
+echo
+echo "Model:"
+echo "  1) Qwen 3.6 35B-A3B MoE MTP, Q8_0"
+echo "  2) Qwen 3.8 27B MTP, Q8_0 (vision projector available)"
+echo "  3) Muse Glimmer 30B, Q8_0 (DFlash sidecar available)"
+echo "  4) Qwen 3.6 27B MTP, Q4_K_M"
+MODEL_CHOICE="$(prompt_choice "Selection (1/2/3/4): ")"
+case "$MODEL_CHOICE" in
+    1)
+        MODEL="$MODELS_DIR/Qwen3.6-35B-A3B-Q8_0.gguf"
+        ARCH="moe"; HAS_MTP=1
+        ;;
+    2)
+        MODEL="$MODELS_DIR/Qwen3.8-27B-Q8_0.gguf"
+        ARCH="qwen38-27b"; HAS_MTP=1
+        ;;
+    3)
+        MODEL="$MODELS_DIR/Muse-Glimmer-30B-Q8_0.gguf"
+        ARCH="muse-glimmer"; HAS_MTP=0
+        ;;
+    4)
+        MODEL="$MODELS_DIR/Qwen3.6-27B-MTP-Q4_K_M.gguf"
+        ARCH="27b"; HAS_MTP=1
+        ;;
+    *) echo "Invalid model selection." >&2; exit 2 ;;
+esac
+
+CTX_K="$(prompt_choice "Context size in Ki tokens (for example 128 or 255): ")"
+[[ "$CTX_K" =~ ^[1-9][0-9]*$ ]] || { echo "Context must be a positive integer." >&2; exit 2; }
+CONTEXT=$((CTX_K * 1024))
+
+# The old *-dflash-IQ4_XS.gguf drafters declare arch 'dflash-draft', which NO
+# current engine loads ("unknown model architecture"). Replaced 2026-08-11 with
+# current-format 'dflash' sidecars from the Anbeeld repos.
+# Only Muse Glimmer needs a DFlash sidecar: it has no MTP head. Every other
+# model here carries built-in MTP (nextn_predict_layers=1), so the old Qwen
+# DFlash sidecars were deleted along with the Q4/IQ4 quants and referencing them
+# made the custom path fail on a missing file.
+if [[ "$ARCH" == "muse-glimmer" ]]; then
+    DRAFTER="$MODELS_DIR/dflash-kquant.gguf"
+else
+    DRAFTER=""
+fi
+
+# ── Decision tree: each step narrows the next; the binary is DERIVED last so a
+# ── later choice can never contradict an earlier one.
+#   speculation  is a property of the model: MTP models always run MTP; non-MTP
+#                models may use DFlash or none.
+#   KV cache     options then follow from the speculation choice (q5_0/q4_0 only
+#                exist for plain base modes on Vulkan).
+#   binary       Mainline (10358) serves qwen35/qwen35moe MTP AND DFlash on both
+#                backends, plus Muse Glimmer DFlash -- BeeLlama is no longer
+#                required for anything. Benchmarked 2026-08-11: BeeLlama and
+#                mainline are within 0.4% on MoE MTP decode (206.0 vs 204.9 t/s).
+#                See docs/QWEN36_SPECULATION_BACKEND_AUDIT.md.
+SPEC_MODE="none"
+DRAFT_TYPE_K=""
+DRAFT_TYPE_V=""
+
+echo
+if [[ "$HAS_MTP" == "1" ]]; then
+    SPEC_MODE="mtp"
+    echo "Speculation: MTP (engaged — model is MTP-capable)"
+elif [[ "$BACKEND" == "rocm" && "$ARCH" != "muse-glimmer" ]]; then
+    echo "Speculation:"
+    echo "  1) DFlash"
+    echo "  2) None"
+    SPEC_CHOICE="$(prompt_choice "Selection (1/2): ")"
+    case "$SPEC_CHOICE" in
+        1) SPEC_MODE="dflash" ;;
+        2) SPEC_MODE="none" ;;
+        *) echo "Invalid speculation selection." >&2; exit 2 ;;
+    esac
+elif [[ "$ARCH" == "muse-glimmer" ]]; then
+    echo "Speculation:"
+    echo "  1) DFlash (16-token block drafter)"
+    echo "  2) None"
+    SPEC_CHOICE="$(prompt_choice "Selection (1/2): ")"
+    case "$SPEC_CHOICE" in
+        1) SPEC_MODE="dflash" ;;
+        2) SPEC_MODE="none" ;;
+        *) echo "Invalid speculation selection." >&2; exit 2 ;;
+    esac
+else
+    SPEC_MODE="none"
+fi
+
+echo
+echo "KV cache:"
+# KVarN removed 2026-08-09: on Vulkan/gfx1100 it is ~47% slower on encode and
+# ~42% on decode than q8_0 for ~1.6 GiB saved. q5_1 saves 1.25 GiB at full speed.
+# See beellama.cpp issue #112. Note q6_0/q6_1/q3_*/q2_* are NOT in Vulkan's
+# fa_kv_ok() whitelist and silently fall off FlashAttention (~10x slower).
+if [[ "$SPEC_MODE" == "none" && "$BACKEND" == "vulkan" ]]; then
+    echo "  1) q8_0"
+    echo "  2) q5_1  (1.25 GiB smaller, same speed)"
+    echo "  3) q5_0"
+    echo "  4) q4_0"
+    KV_CHOICE="$(prompt_choice "Selection (1-4): ")"
+    case "$KV_CHOICE" in
+        1) CACHE_K="q8_0"; CACHE_V="q8_0" ;;
+        2) CACHE_K="q5_1"; CACHE_V="q5_1" ;;
+        3) CACHE_K="q5_0"; CACHE_V="q5_0" ;;
+        4) CACHE_K="q4_0"; CACHE_V="q4_0" ;;
+        *) echo "Invalid KV cache selection." >&2; exit 2 ;;
+    esac
+else
+    echo "  1) q8_0"
+    echo "  2) q5_1  (1.25 GiB smaller, same speed)"
+    KV_CHOICE="$(prompt_choice "Selection (1/2): ")"
+    case "$KV_CHOICE" in
+        1) CACHE_K="q8_0"; CACHE_V="q8_0" ;;
+        2) CACHE_K="q5_1"; CACHE_V="q5_1" ;;
+        *) echo "Invalid KV cache selection." >&2; exit 2 ;;
+    esac
+fi
+
+if [[ "$ARCH" == "qwen38-27b" ]]; then
+    [[ "$BACKEND" == "vulkan" ]] && BINARY="$BIN_VULKAN" || BINARY="$BIN_MAINLINE"
+elif [[ ( "$SPEC_MODE" == "dflash" && "$ARCH" != "muse-glimmer" ) ||
+      ( "$SPEC_MODE" == "mtp" && "$BACKEND" == "vulkan" ) ]]; then
+    [[ "$BACKEND" == "vulkan" ]] && BINARY="$BIN_BEELLAMA_VULKAN" || BINARY="$BIN_BEELLAMA_032"
+else
+    [[ "$BACKEND" == "vulkan" ]] && BINARY="$BIN_VULKAN" || BINARY="$BIN_MAINLINE"
+fi
+
+# Vulkan MTP draft KV defaults to f16, which overflows VRAM at high context; pin q8_0.
+if [[ "$SPEC_MODE" == "mtp" && "$BACKEND" == "vulkan" ]]; then
+    DRAFT_TYPE_K="q8_0"; DRAFT_TYPE_V="q8_0"
+fi
+
+# MTP-only: let the user choose the max draft tokens per step (--spec-draft-n-max).
+# Leave empty for non-MTP modes so the profile inherits default.sh's value.
+SPEC_DRAFT_N_MAX=""
+NAME_SPEC="$SPEC_MODE"
+if [[ "$SPEC_MODE" == "mtp" ]]; then
+    echo
+    DRAFT_N_MAX_INPUT="$(prompt_choice "Max draft tokens per step (MTP n-max) [default 2]: ")"
+    SPEC_DRAFT_N_MAX="${DRAFT_N_MAX_INPUT:-2}"
+    [[ "$SPEC_DRAFT_N_MAX" =~ ^[1-9][0-9]*$ ]] ||
+        { echo "Max draft tokens must be a positive integer." >&2; exit 2; }
+    NAME_SPEC="mtp-n${SPEC_DRAFT_N_MAX}"
+elif [[ "$SPEC_MODE" == "dflash" && "$ARCH" == "muse-glimmer" ]]; then
+    SPEC_DRAFT_N_MAX=15
+    SPEC_DRAFT_N_MIN=0
+    NAME_SPEC="dflash-n${SPEC_DRAFT_N_MAX}"
+fi
+
+prepare_profile_output
+{
+    printf '# Generated by %s\n' "$0"
+    printf 'source %q\n' "$DEFAULT_PROFILE"
+    printf 'PROFILE_NAME=%q\n' "interactive-${ARCH}-${BACKEND}-${CACHE_K}-${NAME_SPEC}-${CTX_K}k"
+    printf 'LLAMA_BINARY=%q\n' "$BINARY"
+    printf 'LLAMA_MODEL=%q\n' "$MODEL"
+    printf 'LLAMA_BACKEND=%q\n' "$BACKEND"
+    if [[ "$BACKEND" == "vulkan" ]]; then
+        if [[ "$ARCH" == "qwen38-27b" ]]; then
+            printf 'LLAMA_DEVICE=%q\n' "Vulkan0,Vulkan1"
+        else
+            printf 'LLAMA_DEVICE=%q\n' "Vulkan0"
+        fi
+    elif [[ "$ARCH" == "qwen38-27b" ]]; then
+        printf 'LLAMA_DEVICE=%q\n' "ROCm0,ROCm1"
+    else
+        printf 'LLAMA_DEVICE=%q\n' ""
+    fi
+    printf 'LLAMA_CONTEXT=%q\n' "$CONTEXT"
+    printf 'LLAMA_CACHE_TYPE_K=%q\n' "$CACHE_K"
+    printf 'LLAMA_CACHE_TYPE_V=%q\n' "$CACHE_V"
+    printf 'LLAMA_SPEC_MODE=%q\n' "$SPEC_MODE"
+    printf 'LLAMA_DRAFTER=%q\n' "$DRAFTER"
+    printf 'LLAMA_SPEC_DRAFT_TYPE_K=%q\n' "$DRAFT_TYPE_K"
+    printf 'LLAMA_SPEC_DRAFT_TYPE_V=%q\n' "$DRAFT_TYPE_V"
+    if [[ "$ARCH" == "qwen38-27b" ]]; then
+        printf 'LLAMA_UBATCH=%q\n' "512"
+        printf 'LLAMA_CACHE_RAM=%q\n' ""
+        printf 'LLAMA_TEMPERATURE=%q\n' "1.0"
+        printf 'LLAMA_TOP_P=%q\n' "0.95"
+        printf 'LLAMA_TOP_K=%q\n' "20"
+        printf 'LLAMA_MIN_P=%q\n' "0.0"
+        printf 'LLAMA_PRESENCE_PENALTY=%q\n' "0.0"
+        printf 'LLAMA_REPEAT_PENALTY=%q\n' "1.0"
+        if [[ "$BACKEND" == "rocm" ]]; then
+            printf 'export HIP_VISIBLE_DEVICES=0,1\n'
+            printf 'LLAMA_EXTRA_ARGS=(--device ROCm0,ROCm1 --split-mode layer --tensor-split 1,1 --main-gpu 1 --batch-size 2048 --no-mmap --mmproj %q --reasoning-preserve)\n' "$MODELS_DIR/mmproj-BF16.gguf"
+        else
+            printf 'LLAMA_EXTRA_ARGS=(--split-mode layer --tensor-split 9,11 --batch-size 2048 --no-mmap --mmproj %q --reasoning-preserve)\n' "$MODELS_DIR/mmproj-BF16.gguf"
+        fi
+    elif [[ "$ARCH" == "muse-glimmer" ]]; then
+        printf 'LLAMA_CONTEXT_SHIFT=%q\n' "1"
+        printf 'LLAMA_TEMPERATURE=%q\n' "0.7"
+        printf 'LLAMA_TOP_P=%q\n' "1.0"
+        printf 'LLAMA_REASONING=%q\n' "auto"
+        printf 'LLAMA_CHAT_TEMPLATE_KWARGS=%q\n' ""
+        printf 'LLAMA_CACHE_RAM=%q\n' ""
+        if [[ "$SPEC_MODE" == "dflash" ]]; then
+            printf 'LLAMA_DFLASH_SPEC_TYPE=%q\n' "draft-dflash"
+            printf 'LLAMA_SPEC_DFLASH_CROSS_CTX=%q\n' ""
+        fi
+    fi
+    if [[ -n "$SPEC_DRAFT_N_MAX" ]]; then
+        printf 'LLAMA_SPEC_DRAFT_N_MAX=%q\n' "$SPEC_DRAFT_N_MAX"
+    fi
+    if [[ -n "${SPEC_DRAFT_N_MIN:-}" ]]; then
+        printf 'LLAMA_SPEC_DRAFT_N_MIN=%q\n' "$SPEC_DRAFT_N_MIN"
+    fi
+} > "$TEMP_PROFILE"
+mv "$TEMP_PROFILE" "$PROFILE_OUT"
+
+run_profile

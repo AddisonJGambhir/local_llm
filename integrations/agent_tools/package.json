@@ -1,0 +1,25 @@
+{
+  "name": "agent_tools",
+  "version": "1.0.0",
+  "description": "Shared MCP tools for agent harnesses",
+  "type": "module",
+  "bin": {
+    "mcp-local-llm": "./local-llm-mcp.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/server-filesystem": "^2026.1.14",
+    "@modelcontextprotocol/server-github": "^2025.4.8",
+    "@upstash/context7-mcp": "^3.2.1",
+    "codebase-memory-mcp": "^0.9.0",
+    "firecrawl-mcp": "^3.22.3",
+    "mcp-searxng": "^1.7.2",
+    "zod": "^3.25.0"
+  }
+}

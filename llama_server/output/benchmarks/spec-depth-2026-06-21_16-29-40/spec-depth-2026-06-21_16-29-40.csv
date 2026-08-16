@@ -1,0 +1,16 @@
+model,n_max,adaptive,ctx_k,backend,quant,vram,runs,prompt_tokens,output_tokens,encode,decode,decode_std,accept,accept_std,status
+Qwen3.6-35B-A3B-MTP-UD-IQ4_NL,2,off,128,vulkan,q8_0,20.8 GiB,5,359,2048,1388.0,199.6,5.3,0.8654,0.0414,ok
+Qwen3.6-35B-A3B-MTP-UD-IQ4_NL,3,off,128,vulkan,q8_0,20.7 GiB,5,359,2048,1377.4,212.7,13.1,0.7803,0.0662,ok
+Qwen3.6-35B-A3B-MTP-UD-IQ4_NL,4,off,128,vulkan,q8_0,21.0 GiB,5,359,2048,1360.3,218.7,11.1,0.7230,0.0506,ok
+Qwen3.6-35B-A3B-MTP-UD-IQ4_NL,5,off,128,vulkan,q8_0,21.0 GiB,5,359,2048,1356.8,208.4,42.8,0.6280,0.1759,ok
+Qwen3.6-35B-A3B-MTP-UD-IQ4_NL,6,off,128,vulkan,q8_0,21.1 GiB,5,359,2048,1347.9,237.5,52.7,0.7000,0.1981,ok
+Qwen3.6-35B-A3B-UD-Q4_K_M,2,off,128,vulkan,q8_0,23.6 GiB,5,359,2048,1418.6,185.0,4.6,0.8614,0.0304,ok
+Qwen3.6-35B-A3B-UD-Q4_K_M,3,off,128,vulkan,q8_0,23.9 GiB,5,359,2048,1248.9,116.7,6.8,0.8173,0.0679,ok
+Qwen3.6-35B-A3B-UD-Q4_K_M,4,off,128,vulkan,q8_0,23.9 GiB,5,359,2048,341.2,59.2,3.3,0.7598,0.0572,ok
+Qwen3.6-35B-A3B-UD-Q4_K_M,5,off,128,vulkan,q8_0,23.9 GiB,5,359,2048,1363.2,196.6,21.4,0.6512,0.0934,ok
+Qwen3.6-35B-A3B-UD-Q4_K_M,6,off,128,vulkan,q8_0,23.9 GiB,5,359,2048,1301.9,243.1,26.5,0.8445,0.1108,ok
+Qwen3.6-27B-MTP-Q4_K_M,2,off,128,vulkan,q8_0,21.6 GiB,5,359,2048,560.6,74.2,3.8,0.8345,0.0561,ok
+Qwen3.6-27B-MTP-Q4_K_M,3,off,128,vulkan,q8_0,21.6 GiB,5,359,2048,568.5,84.9,5.4,0.7758,0.0682,ok
+Qwen3.6-27B-MTP-Q4_K_M,4,off,128,vulkan,q8_0,21.7 GiB,5,359,2048,569.8,86.4,10.8,0.6869,0.1184,ok
+Qwen3.6-27B-MTP-Q4_K_M,5,off,128,vulkan,q8_0,21.8 GiB,5,359,2048,563.7,95.5,8.9,0.7599,0.0972,ok
+Qwen3.6-27B-MTP-Q4_K_M,6,off,128,vulkan,q8_0,22.2 GiB,5,359,2048,555.7,93.0,6.4,0.7121,0.0609,ok

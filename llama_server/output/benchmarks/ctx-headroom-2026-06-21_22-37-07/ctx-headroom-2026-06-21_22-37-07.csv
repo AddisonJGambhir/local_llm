@@ -1,0 +1,7 @@
+model,kv,mtp,max_fit_ctx_k,first_spill_ctx_k,proc_vram_gib_at_max,proc_gtt_gib_at_max,vram_free_gib_at_max,note
+Qwen3.6-35B-A3B-MTP-UD-IQ4_NL,q8_0,True,256,N/A,20.10,0.20,2.57,>= 256k (no spill within tested range)
+Qwen3.6-35B-A3B-MTP-UD-IQ4_NL,kvarn,True,256,N/A,19.66,0.20,2.96,>= 256k (no spill within tested range)
+Qwen3.6-35B-A3B-UD-Q4_K_M,q8_0,True,176,184,22.62,0.50,0.03,"fits to ~176k, spills by 184k"
+Qwen3.6-35B-A3B-UD-Q4_K_M,kvarn,True,200,208,22.66,0.46,0.02,"fits to ~200k, spills by 208k"
+Qwen3.6-27B-MTP-Q4_K_M,q8_0,True,192,200,22.30,0.56,0.38,"fits to ~192k, spills by 200k"
+Qwen3.6-27B-MTP-Q4_K_M,kvarn,True,256,N/A,22.59,0.21,0.12,>= 256k (no spill within tested range)

@@ -1,0 +1,120 @@
+#!/bin/bash
+# harness — pick and launch a local AI coding harness
+# Usage: harness  (from any project directory)
+
+echo ""
+echo "Which harness would you like to use?"
+echo ""
+echo "  1) Pi           (pi)"
+echo "  2) Qwen Code    (qwen)"
+echo "  3) Hermes       (hermes)"
+echo "  4) oh-my-pi     (omp)"
+echo "  5) OpenCode     (opencode)"
+echo "  6) OpenClaw     (openclaw)"
+echo "  7) Cline        (cline)"
+echo "  8) OpenHands    (openhands)"
+echo "  9) Kilo Code    (kilo)"
+echo ""
+read -p "Selection (1/2/3/4/5/6/7/8/9): " CHOICE
+echo ""
+
+# Helper: open a command in a new terminal window
+open_new_terminal() {
+    local cmd="$1"
+    if command -v gnome-terminal &>/dev/null; then
+        gnome-terminal -- bash -c "$cmd; exec bash" &
+    elif command -v x-terminal-emulator &>/dev/null; then
+        x-terminal-emulator -e bash -c "$cmd; exec bash" &
+    elif command -v xterm &>/dev/null; then
+        xterm -e bash -c "$cmd; exec bash" &
+    else
+        echo "No terminal emulator found — starting gateway in background instead"
+        nohup bash -c "$cmd" > /tmp/openclaw-gateway.log 2>&1 &
+        echo "Gateway log: /tmp/openclaw-gateway.log"
+    fi
+}
+
+case "$CHOICE" in
+    1)
+         # Pi — minimal harness, connect to local llama.cpp on :1234
+         # The llama-cpp extension auto-discovers the server via LLAMA_SERVER_URL
+         echo "Starting Pi (connected to local llama.cpp on :1234)..."
+         export LLAMA_SERVER_URL=http://127.0.0.1:1234
+         exec pi
+         ;;
+    2)
+        export OPENROUTER_API_KEY=$(secret-tool lookup service openrouter_key account default 2>/dev/null)
+        exec qwen
+        ;;
+    3) exec hermes ;;
+    4)
+         # oh-my-pi (omp) — enhanced Pi fork (LSP, browser, subagents, AST edits).
+         # Config: ~/.omp/agent/{models.yml,config.yml}. Boots on the local
+         # llama-server (127.0.0.1:1234); switch to an OpenRouter model any time
+         # with /model or Ctrl+P. The OpenRouter key is read from the keyring by
+         # models.yml (!secret-tool), so no export is needed here.
+         echo "Starting oh-my-pi (local Qwen3.6 default; /model → OpenRouter)..."
+         exec omp
+         ;;
+    5) exec opencode ;;
+    6)
+        # The OpenClaw gateway is normally a supervised systemd user service
+        # (openclaw-gateway.service on :18789). Spawning a second
+        # `openclaw gateway run` when one already holds the port just fails
+        # (exit 78, "already running under systemd"). So only start one if the
+        # port is free; otherwise go straight to the dashboard.
+        if ss -tln 2>/dev/null | grep -q ':18789 '; then
+            echo "OpenClaw gateway already running (:18789) — opening dashboard..."
+        else
+            echo "Starting OpenClaw gateway in a new terminal..."
+            open_new_terminal "openclaw gateway run"
+            sleep 2
+        fi
+        echo "Opening OpenClaw dashboard..."
+        openclaw dashboard
+        ;;
+    7)
+        # Cline — autonomous coding agent CLI (npm -g cline). Provider config is
+        # persisted in ~/.cline via `cline auth`; "openai-compatible" points at
+        # tool_call_proxy on :1235, not llama-server directly. Re-point with:
+        #   cline auth -p openai -b http://127.0.0.1:1235/v1 -m local -k local
+        #
+        # Cline's own system prompt tells the model to batch multiple tool
+        # calls into one turn, and Cline never sends parallel_tool_calls, so
+        # llama.cpp falls back to the template's default (on, for Qwen3.6).
+        # A second tool call in the same turn crashes Cline's Hub ("Hub
+        # connection closed", 1006) or leaks raw <function=...> markup mid
+        # grammar transition. tool_call_proxy.py forces
+        # parallel_tool_calls=false on every request so each turn stays to
+        # one tool call, which is what Cline's execution pipeline expects.
+        if ! ss -tln 2>/dev/null | grep -q ':1235 '; then
+            echo "Starting tool_call_proxy (:1235 -> :1234)..."
+            nohup python3 "$(dirname "${BASH_SOURCE[0]}")/../src/server/tool_call_proxy.py" \
+                > /tmp/tool-call-proxy.log 2>&1 &
+            disown
+            sleep 1
+        fi
+        echo "Starting Cline (via tool_call_proxy on :1235; single tool call per turn; 20 retries)..."
+        exec cline -i --retries 20
+        ;;
+    8)
+        # OpenHands — autonomous AI dev agent CLI (uv tool install openhands).
+        # --override-with-envs is REQUIRED for these LLM_* vars to take effect;
+        # without it OpenHands reads ~/.openhands/settings.json and hangs on
+        # first-run setup. Model slug is LiteLLM's openai/<name>; llama-server
+        # serves id "local", and any non-empty API key satisfies the client.
+        echo "Starting OpenHands (local llama.cpp on :1234)..."
+        export LLM_MODEL=openai/local
+        export LLM_BASE_URL=http://127.0.0.1:1234/v1
+        export LLM_API_KEY=local
+        export OPENHANDS_SUPPRESS_BANNER=1
+        exec openhands --override-with-envs
+        ;;
+    9)
+        # Kilo CLI uses the OpenCode-compatible provider configuration in
+        # ~/.config/kilo/kilo.jsonc and defaults to llama-local/local.
+        echo "Starting Kilo Code (local llama.cpp on :1234)..."
+        exec kilo
+        ;;
+    *) echo "Invalid selection: '$CHOICE'"; exit 1 ;;
+esac

@@ -1,0 +1,396 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LLAMA_SERVER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LLM_ROOT="$(cd "$LLAMA_SERVER_ROOT/.." && pwd)"
+DEFAULT_PROFILE="$LLAMA_SERVER_ROOT/config/profiles/default.sh"
+SERVER_SRC="$LLAMA_SERVER_ROOT/src/server"
+RUNTIME_BASE="${XDG_RUNTIME_DIR:-/tmp}"
+if [[ ! -d "$RUNTIME_BASE" || ! -w "$RUNTIME_BASE" ]]; then
+    RUNTIME_BASE="/tmp"
+fi
+if [[ "$RUNTIME_BASE" == "/tmp" ]]; then
+    RUNTIME_DIR="$RUNTIME_BASE/local-llm-$UID"
+else
+    RUNTIME_DIR="$RUNTIME_BASE/local-llm"
+fi
+SUPERVISOR_PID_FILE="$RUNTIME_DIR/supervisor.pid"
+SERVER_PID_FILE="$RUNTIME_DIR/server.pid"
+CURRENT_PROFILE_FILE="$RUNTIME_DIR/current-profile"
+
+# shellcheck source=../src/server/common.sh
+source "$SERVER_SRC/common.sh"
+
+usage() {
+    cat <<'EOF'
+Usage: llamactl <start|stop|restart|status|health|logs|command> [--profile PATH]
+
+  start     Start the configured server and wait for health.
+  stop      Stop only the PID owned by this setup.
+  restart   Stop the active server, then start the selected profile.
+  status    Show profile, PIDs, listener, and health.
+  health    Query the configured /health endpoint.
+  logs      Follow the rotating server log.
+  command   Validate and print the exact server command.
+EOF
+}
+
+read_pid() {
+    local file="$1" expected="${2:-}" pid cmd
+    [[ -r "$file" ]] || return 1
+    read -r pid < "$file"
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    if [[ -n "$expected" ]]; then
+        cmd="$(pid_command "$pid")"
+        [[ "$cmd" == *"$LLM_ROOT/"* && "$cmd" == *"$expected"* ]] || return 1
+    fi
+    printf '%s\n' "$pid"
+}
+
+pid_command() {
+    local pid="$1"
+    tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true
+}
+
+port_pids() {
+    fuser -n tcp "$LLAMA_PORT" 2>/dev/null | tr ' ' '\n' | sed '/^$/d' || true
+}
+
+health_url() {
+    if [[ "$LLAMA_HOST" == *:* ]]; then
+        printf 'http://[%s]:%s/health\n' "$LLAMA_HOST" "$LLAMA_PORT"
+    else
+        printf 'http://%s:%s/health\n' "$LLAMA_HOST" "$LLAMA_PORT"
+    fi
+}
+
+check_health() {
+    local curl_args=(--max-time 3 --fail --silent --show-error)
+    local api_key
+    if [[ -n "$LLAMA_API_KEY_FILE" ]]; then
+        api_key="$(awk 'NF { print; exit }' "$LLAMA_API_KEY_FILE")"
+        [[ -n "$api_key" ]] || { echo "API-key file is empty" >&2; return 1; }
+        curl_args+=(--header "Authorization: Bearer $api_key")
+    fi
+    curl "${curl_args[@]}" "$(health_url)"
+}
+
+wait_for_health() {
+    local deadline=$((SECONDS + LLAMA_STARTUP_TIMEOUT))
+    while ((SECONDS < deadline)); do
+        if check_health >/dev/null 2>&1; then
+            return 0
+        fi
+        if ! read_pid "$SUPERVISOR_PID_FILE" "supervisor.py" >/dev/null; then
+            return 1
+        fi
+        sleep 2
+    done
+    return 1
+}
+
+wait_for_exit() {
+    local pid="$1" timeout="$2" deadline
+    deadline=$((SECONDS + timeout))
+    while kill -0 "$pid" 2>/dev/null && ((SECONDS < deadline)); do
+        sleep 0.25
+    done
+    ! kill -0 "$pid" 2>/dev/null
+}
+
+stop_pid() {
+    local pid="$1" label="$2"
+    kill -TERM "$pid" 2>/dev/null || return 0
+    if ! wait_for_exit "$pid" "$LLAMA_STOP_TIMEOUT"; then
+        echo "$label pid $pid did not exit after ${LLAMA_STOP_TIMEOUT}s; sending KILL" >&2
+        kill -KILL "$pid" 2>/dev/null || true
+        wait_for_exit "$pid" 5 || true
+    fi
+}
+
+stop_server() {
+    local supervisor_pid server_pid pid cmd stopped=0
+
+    server_pid="$(read_pid "$SERVER_PID_FILE" "llama-server" || true)"
+    if supervisor_pid="$(read_pid "$SUPERVISOR_PID_FILE" "supervisor.py")"; then
+        echo "stopping supervisor pid $supervisor_pid"
+        stop_pid "$supervisor_pid" "supervisor"
+        stopped=1
+        if [[ -n "$server_pid" ]] && kill -0 "$server_pid" 2>/dev/null; then
+            echo "stopping remaining server pid $server_pid"
+            stop_pid "$server_pid" "server"
+        fi
+    elif [[ -n "$server_pid" ]]; then
+        echo "stopping server pid $server_pid"
+        stop_pid "$server_pid" "server"
+        stopped=1
+    else
+        # One-time migration path for the old manually launched pipeline. The PID
+        # is accepted only when its command belongs to this workspace.
+        while read -r pid; do
+            [[ -n "$pid" ]] || continue
+            cmd="$(pid_command "$pid")"
+            if [[ "$cmd" == *"$LLM_ROOT/"* && "$cmd" == *"llama-server"* ]]; then
+                echo "adopting and stopping legacy server pid $pid on port $LLAMA_PORT"
+                stop_pid "$pid" "legacy server"
+                stopped=1
+            else
+                echo "error: port $LLAMA_PORT is owned by an unmanaged process: pid $pid $cmd" >&2
+                return 1
+            fi
+        done < <(port_pids)
+    fi
+
+    rm -f "$SUPERVISOR_PID_FILE" "$SERVER_PID_FILE"
+    if ((stopped == 0)); then
+        echo "server is not running"
+    else
+        echo "server stopped"
+    fi
+}
+
+gpu_mem_line() {
+    # Echo "vram_used vram_total gtt_used" (bytes) for the discrete GPU — the DRM
+    # card whose VRAM total exceeds 8 GiB (skips the iGPU). Returns 1 if none.
+    local d vt tot vu gu
+    for d in /sys/class/drm/card*/device; do
+        vt="$d/mem_info_vram_total"
+        [[ -r "$vt" ]] || continue
+        tot="$(cat "$vt" 2>/dev/null)" || continue
+        [[ "$tot" =~ ^[0-9]+$ ]] && ((tot > 8000000000)) || continue
+        vu="$(cat "$d/mem_info_vram_used" 2>/dev/null || echo 0)"
+        gu="$(cat "$d/mem_info_gtt_used" 2>/dev/null || echo 0)"
+        printf '%s %s %s\n' "$vu" "$tot" "$gu"
+        return 0
+    done
+    return 1
+}
+
+gpu_gtt_baseline() {
+    # GTT used right now (bytes), or empty if no discrete GPU is visible.
+    local line
+    if line="$(gpu_mem_line)"; then printf '%s' "${line##* }"; fi
+}
+
+proc_gpu_mem() {
+    # DIRECT per-process residency from amdgpu fdinfo → "vram_kib gtt_kib".
+    # drm-memory-gtt is exactly how much of THIS server's GPU data lives in system
+    # RAM (the spill); drm-memory-vram is what's truly resident. Max across the
+    # process's render-node fds picks the dGPU figures (the iGPU node is tiny).
+    # Returns 1 if the kernel doesn't expose these keys or the pid is gone.
+    local pid="$1" vram gtt
+    [[ -n "$pid" && -d "/proc/$pid" ]] || return 1
+    vram="$(grep -h '^drm-memory-vram:' /proc/"$pid"/fdinfo/* 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1)"
+    gtt="$(grep -h '^drm-memory-gtt:'  /proc/"$pid"/fdinfo/* 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1)"
+    [[ -n "$vram" || -n "$gtt" ]] || return 1
+    printf '%s %s\n' "${vram:-0}" "${gtt:-0}"
+}
+
+# Report GPU memory. The whole-card line (sysfs) is context; the per-process line
+# (fdinfo) is the DIRECT spill signal — how much of the llama-server process is in
+# VRAM vs system RAM (GTT). GTT always has a small baseline (pinned host buffers),
+# so spill = GiB-scale process GTT, not merely non-zero. Falls back to whole-card
+# heuristics (GTT delta / VRAM-free) only when fdinfo is unavailable.
+report_gpu_mem() {
+    local server_pid="${1:-}" baseline_gtt="${2:-}" line vu tot gu free="" pm pv pg
+    if line="$(gpu_mem_line)"; then
+        read -r vu tot gu <<< "$line"
+        free=$((tot - vu))
+        awk -v vu="$vu" -v tot="$tot" -v gu="$gu" -v free="$free" -v base="$baseline_gtt" 'BEGIN{
+            g = 1073741824;
+            delta_s = (base == "") ? "" : sprintf(" (%+.2f since start)", (gu - base) / g);
+            printf "gpu memory [whole card]: VRAM %.2f/%.2f GiB (%.2f free) · GTT %.2f GiB%s\n",
+                   vu/g, tot/g, free/g, gu/g, delta_s;
+        }'
+    else
+        echo "gpu memory: whole-card sysfs unavailable"
+    fi
+
+    if [[ -n "$server_pid" ]] && pm="$(proc_gpu_mem "$server_pid")"; then
+        read -r pv pg <<< "$pm"
+        awk -v pv="$pv" -v pg="$pg" 'BEGIN{
+            m = 1048576; half = 314573;  # KiB; 0.30 GiB spill threshold
+            printf "  server process: %.2f GiB resident in VRAM, %.2f GiB in SYSTEM RAM (GTT)\n", pv/m, pg/m;
+            if (pg > half)
+                printf "  ** SPILL: %.2f GiB of this server is in system RAM, not VRAM — decode will be slow; reduce context/KV or use a smaller model **\n", pg/m;
+        }'
+    elif [[ -n "$free" ]]; then
+        # No fdinfo — fall back to whole-card heuristics.
+        awk -v free="$free" -v gu="$gu" -v base="$baseline_gtt" 'BEGIN{
+            g = 1073741824; half = 536870912;
+            if (base != "" && (gu - base) > half)
+                printf "  ** SPILL (approx): GTT grew %.2f GiB since start — likely in system RAM; reduce context/KV **\n", (gu - base)/g;
+            else if (free < half)
+                printf "  ** WARNING: only %.2f GiB VRAM free — at the edge; may spill to system RAM **\n", free/g;
+        }'
+    fi
+    return 0
+}
+
+start_server() {
+    local existing_pid supervisor_pid gpu_baseline_gtt gpu_report server_pid_now
+
+    llama_validate_profile
+    llama_build_command
+
+    if existing_pid="$(read_pid "$SUPERVISOR_PID_FILE" "supervisor.py")"; then
+        echo "error: supervisor is already running (pid $existing_pid)" >&2
+        return 1
+    fi
+    if [[ -n "$(port_pids)" ]]; then
+        echo "error: port $LLAMA_PORT is already in use; run '$0 status' or '$0 stop'" >&2
+        return 1
+    fi
+
+    mkdir -p "$RUNTIME_DIR" "$(dirname "$LLAMA_LOG_FILE")"
+    printf '%s\n' "$PROFILE_PATH" > "$CURRENT_PROFILE_FILE"
+
+    if [[ "$LLAMA_BACKEND" == "vulkan" ]]; then
+        unset HIP_VISIBLE_DEVICES
+    else
+        export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0}"
+    fi
+
+    echo "── final configuration (resolved server command) ──"
+    llama_print_command
+    echo
+    echo "starting $PROFILE_NAME"
+    echo "log: $LLAMA_LOG_FILE"
+    gpu_baseline_gtt="$(gpu_gtt_baseline)"
+    nohup setsid --fork python3 "$SERVER_SRC/supervisor.py" \
+        --supervisor-pid-file "$SUPERVISOR_PID_FILE" \
+        --server-pid-file "$SERVER_PID_FILE" \
+        --log-file "$LLAMA_LOG_FILE" \
+        --max-bytes "$LLAMA_LOG_MAX_BYTES" \
+        --backups "$LLAMA_LOG_BACKUPS" \
+        -- "${LLAMA_CMD[@]}" \
+        </dev/null >/dev/null 2>&1 &
+
+    for _ in {1..40}; do
+        if supervisor_pid="$(read_pid "$SUPERVISOR_PID_FILE" "supervisor.py")"; then
+            break
+        fi
+        sleep 0.1
+    done
+    if [[ -z "${supervisor_pid:-}" ]]; then
+        echo "error: supervisor failed to start" >&2
+        tail -n 30 "$LLAMA_LOG_FILE" 2>/dev/null || true
+        return 1
+    fi
+
+    echo "supervisor pid: $supervisor_pid; waiting up to ${LLAMA_STARTUP_TIMEOUT}s for health"
+    if ! wait_for_health; then
+        echo "error: server failed to become healthy" >&2
+        tail -n 40 "$LLAMA_LOG_FILE" 2>/dev/null || true
+        stop_server || true
+        return 1
+    fi
+
+    echo "healthy: $(check_health)"
+    server_pid_now="$(read_pid "$SERVER_PID_FILE" "llama-server" || true)"
+    gpu_report="$(report_gpu_mem "$server_pid_now" "$gpu_baseline_gtt")"
+    printf '%s\n' "$gpu_report"
+    # Persist into the server log too: the launcher execs into `llamactl logs`
+    # right after, which floods the terminal and buries stdout. Best-effort.
+    printf '%s\n' "$gpu_report" >> "$LLAMA_LOG_FILE" 2>/dev/null || true
+    if [[ "$LLAMA_SYNC_CLIENTS" == "1" ]]; then
+        python3 "$SERVER_SRC/sync_clients.py" \
+            --alias "$LLAMA_ALIAS" --context "$LLAMA_CONTEXT" || true
+    fi
+}
+
+show_status() {
+    local supervisor_pid="" server_pid="" cmd
+
+    supervisor_pid="$(read_pid "$SUPERVISOR_PID_FILE" "supervisor.py" || true)"
+    server_pid="$(read_pid "$SERVER_PID_FILE" "llama-server" || true)"
+    echo "profile: $PROFILE_NAME"
+    echo "profile file: $PROFILE_PATH"
+    echo "endpoint: http://$LLAMA_HOST:$LLAMA_PORT"
+    echo "log: $LLAMA_LOG_FILE"
+    echo "supervisor pid: ${supervisor_pid:-not running}"
+    echo "server pid: ${server_pid:-not running}"
+    if [[ -n "$server_pid" ]]; then
+        cmd="$(pid_command "$server_pid")"
+        echo "command: $cmd"
+    fi
+    report_gpu_mem "$server_pid"
+    if check_health >/dev/null 2>&1; then
+        echo "health: $(check_health)"
+    else
+        echo "health: unavailable"
+        [[ -n "$supervisor_pid" || -n "$server_pid" ]] && return 1
+    fi
+}
+
+ACTION="${1:-}"
+[[ -n "$ACTION" ]] || { usage; exit 2; }
+shift || true
+
+PROFILE_PATH=""
+PROFILE_EXPLICIT=0
+while (($#)); do
+    case "$1" in
+        --profile)
+            [[ $# -ge 2 ]] || { echo "error: --profile requires a path" >&2; exit 2; }
+            PROFILE_PATH="$2"
+            PROFILE_EXPLICIT=1
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "error: unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+mkdir -p "$RUNTIME_DIR"
+if ((PROFILE_EXPLICIT == 0)) &&
+    [[ "$ACTION" =~ ^(stop|restart|status|health|logs)$ ]] &&
+    [[ -r "$CURRENT_PROFILE_FILE" ]]; then
+    read -r PROFILE_PATH < "$CURRENT_PROFILE_FILE"
+fi
+PROFILE_PATH="${PROFILE_PATH:-$DEFAULT_PROFILE}"
+PROFILE_PATH="$(realpath -m "$PROFILE_PATH")"
+llama_load_profile "$PROFILE_PATH"
+
+case "$ACTION" in
+    start)
+        start_server
+        ;;
+    stop)
+        stop_server
+        ;;
+    restart)
+        stop_server
+        start_server
+        ;;
+    status)
+        show_status
+        ;;
+    health)
+        check_health
+        printf '\n'
+        ;;
+    logs)
+        touch "$LLAMA_LOG_FILE"
+        exec tail -n 100 -F "$LLAMA_LOG_FILE"
+        ;;
+    command|dry-run)
+        llama_validate_profile
+        llama_build_command
+        llama_print_command
+        ;;
+    *)
+        echo "error: unknown action: $ACTION" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
