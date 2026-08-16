@@ -94,13 +94,14 @@ case "$BACKEND_CHOICE" in
             echo "Presets — ROCm:"
             echo "  1) Qwen 3.6 35B-A3B MoE Q8_0  vision  — MTP n2 — f16 — 256k  (2511 pp /  81.5 tg)"
             echo "  2) Qwen 3.6 35B-A3B MoE Q8_0  text    — MTP n2 — f16 — 256k  (2538 pp /  83.2 tg)"
-            echo "  3) Qwen 3.8 27B dense  Q8_0   vision  — MTP n3 — f16 — 256k  ( 982 pp /  38.5 tg)"
+            echo "  3) Qwen 3.8 27B dense  Q8_0   vision  — MTP n3 — f16  — 256k  ( 982 pp /  40.4 tg, decode-opt)"
             echo "  4) Qwen 3.6 27B dense  Q4_K_M         — MTP n2 — f16 — 256k  (1408 pp /  36.9 tg, fastest prefill)"
             echo "  5) Muse Glimmer 30B    Q8_0           — DFlash n2 — f16 — 128k  ( 986 pp /  33.2 tg)"
             echo "  6) Muse Glimmer 30B    Q8_0   YaRN    — DFlash n2 — f16 — 256k  ( 891 pp /  34.1 tg, retrieval 3/3)"
             echo "  7) Nemotron 3.5 30B-A3B Q8_0          — no spec  — f16 — 256k  (3034 pp /  94.6 tg)"
             echo "  8) Nemotron 3.5 30B-A3B Q8_0  1M ctx  — no spec  — f16 —   1M  (2555 pp /  94.7 tg)"
-            PRESET_CHOICE="$(prompt_choice "Preset (1/2/3/4/5/6/7/8): ")"
+            echo "  9) Qwen 3.8 27B dense  Q8_0   vision  — MTP n3 — q8_0 — 256k  (1067 pp /  31.3 tg, prefill-opt)"
+            PRESET_CHOICE="$(prompt_choice "Preset (1/2/3/4/5/6/7/8/9): ")"
             case "$PRESET_CHOICE" in
                 1) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-rocm-dual-q8-256k-mmproj.sh" ;;
                 2) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-rocm-dual-256k-textonly.sh" ;;
@@ -110,6 +111,7 @@ case "$BACKEND_CHOICE" in
                 6) PRESET_PROFILE="$P/preset-muse-glimmer-30b-q8-rocm-dual-256k-yarn.sh" ;;
                 7) PRESET_PROFILE="$P/preset-nemotron35-30b-a3b-q8-rocm-dual-256k.sh" ;;
                 8) PRESET_PROFILE="$P/preset-nemotron35-30b-a3b-q8-rocm-dual-1m.sh" ;;
+                9) PRESET_PROFILE="$P/preset-38-27b-q8-rocm-dual-256k-ppopt.sh" ;;
                 *) echo "Invalid preset selection." >&2; exit 2 ;;
             esac
         else

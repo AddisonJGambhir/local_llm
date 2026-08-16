@@ -43,7 +43,8 @@ case "$CHOICE" in
          exec pi
          ;;
     2)
-        export OPENROUTER_API_KEY=$(secret-tool lookup service openrouter_key account default 2>/dev/null)
+        OPENROUTER_API_KEY=$(secret-tool lookup service openrouter_key account default 2>/dev/null)
+        export OPENROUTER_API_KEY
         exec qwen
         ;;
     3) exec hermes ;;
