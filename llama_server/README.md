@@ -222,7 +222,7 @@ Draft depth is **not portable** across models. Each model and backend has its ow
 | Muse Glimmer (ROCm) | **15** | 45.8 | DFlash, different mechanism entirely. |
 | Muse Glimmer (Vulkan) | **4** | 73.8 | Same DFlash drafter but Vulkan verify costs more, so shallow depth wins. |
 
-The PROFIT controller (BeeLlama `dm_adaptive=true`) adapts depth per step within the ceiling.
+Mainline's adaptive-p controller can adapt depth per step within the ceiling.
 On the MoE, even with the controller on, n_max=3 is slower than n_max=2 because the
 verify pass at 3-wide is already expensive relative to the fast MoE decode.
 
@@ -250,13 +250,11 @@ provides the headroom.
 | --- | --- | --- |
 | mainline ROCm | `../llama.cpp/build/bin/llama-server` | 35B MoE dual-GPU (ROCm), Muse DFlash |
 | mainline Vulkan | `../llama.cpp/build-vulkan/bin/llama-server` | 35B MoE single/dual-GPU (Vulkan), 27B Vulkan |
-| BeeLlama ROCm | `../llama.cpp-beellama-032-hip/build/bin/llama-server` | KVarN, DFlash on ROCm (legacy) |
-| BeeLlama Vulkan | `../llama.cpp-beellama-032-hip/build-vulkan/bin/llama-server` | KVarN, MTP on Vulkan (legacy) |
-
-**Current state:** Mainline 10358 serves MTP and DFlash for all Qwen architectures on both
-backends. BeeLlama v0.3.2 is retained only for KVarN experiments (which are now
-superseded by f16 KV on dual-GPU). The mainline vulkan build is used for the
-production single-GPU MoE profile.
+**Current state:** Mainline 10358 is the only installed engine and serves MTP,
+DFlash and adaptive-p speculation for all models on both backends. The BeeLlama
+v0.3.2 tree was removed 2026-08-16: its one exclusive feature (KVarN) is
+superseded by f16 KV on dual-GPU, and mainline measured within 0.4% of BeeLlama
+on MoE MTP decode (2026-08-11 audit).
 
 ---
 
@@ -265,9 +263,9 @@ production single-GPU MoE profile.
 ### MTP (self-speculation) — the production path
 
 The MTP-head models draft their own next tokens; accepted drafts skip a forward pass.
-**`--spec-draft-n-max` is a CEILING**, not a pin. On BeeLlama, the adaptive PROFIT
-controller (`dm_adaptive=true`) varies the effective draft depth per step within that
-ceiling (probing, EWMA raise/lower, recalibrated every 1024 tokens).
+**`--spec-draft-n-max` is the pinned draft depth on mainline** — the adaptive-p
+controller (`--adaptive-target`, off by default) is the only thing that can vary
+the effective depth, and production runs with it off.
 
 Key points:
 
@@ -306,7 +304,7 @@ Workaround: restart the server after heavy image use, or run a text-only profile
 | Type | Notes |
 | `q8_0` | symmetric 8-bit KV, safe quality, used by default on single-GPU |
 | `f16` | full-float KV. Faster decode on Vulkan (no dequant), used on dual-GPU 35B MoE |
-| `kvarn5` / `kvarn4` | BeeLlama asymmetric KV — q6-class quality at q4-class size. Compresses target KV only. KVarN is superseded by f16 KV on dual-GPU where headroom allows. |
+| `kvarn5` / `kvarn4` | Retired with the BeeLlama tree (2026-08-16). Was q6-class quality at q4-class size; superseded by f16 KV on dual-GPU. No active profile uses it. |
 | `q5_1` / `q5_0` / `q4_0` | smaller/older; Vulkan base only. Archived. |
 
 ---
@@ -344,7 +342,7 @@ all require the GPU free (`llamakill` first). Each binds port `1235`.
 
 | Command | Script | Finds |
 | `llama-benchmark` | `src/benchmarks/matrix.py` | full backend × model × spec × KV matrix (encode/decode t/s, VRAM) |
-| `llama-benchmark-mtp` | `src/benchmarks/spec_depth.py` | MTP `n_max` 2→6 sweep on the Vulkan path; `--repeats N`, `--no-adaptive` to pin depth; parses `draft acceptance` |
+| `llama-benchmark-mtp` | `src/benchmarks/spec_depth.py` | MTP `n_max` 2→6 sweep on the mainline Vulkan path; depth pinned by default (production); `--adaptive` tests adaptive-p; `--repeats N`; parses `draft acceptance` |
 | `llama-benchmark-ctx` | `src/benchmarks/ctx_headroom.py` | **max context before VRAM spill**, per model, via binary search on fdinfo GTT |
 
 `--list` and `--dry-run` work on all three.
@@ -449,7 +447,6 @@ output/benchmarks/<stamp>/                          CSV + per-run logs
 output/diagnostics/llama-proxy/<stamp>/             TCP passthrough dumps (from llama-proxy)
 llama.cpp/                                          mainline llama.cpp 10358 (ROCm + Vulkan builds)
 llama.cpp-next/                                     next-line llama.cpp
-llama.cpp-beellama-032-hip/                         BeeLlama v0.3.2 (KVarN experiments, legacy)
 ```
 
 ---

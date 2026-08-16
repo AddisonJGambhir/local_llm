@@ -28,8 +28,6 @@ esac
 
 BIN_MAINLINE="$LLM_ROOT/llama.cpp/build/bin/llama-server"
 BIN_VULKAN="$LLM_ROOT/llama.cpp/build-vulkan/bin/llama-server"
-BIN_BEELLAMA_032="$LLM_ROOT/llama.cpp-beellama-032-hip/build/bin/llama-server"
-BIN_BEELLAMA_VULKAN="$LLM_ROOT/llama.cpp-beellama-032-hip/build-vulkan/bin/llama-server"
 
 prompt_choice() {
     local prompt="$1" value
@@ -197,10 +195,11 @@ fi
 #                models may use DFlash or none.
 #   KV cache     options then follow from the speculation choice (q5_0/q4_0 only
 #                exist for plain base modes on Vulkan).
-#   binary       Mainline (10358) serves qwen35/qwen35moe MTP AND DFlash on both
-#                backends, plus Muse Glimmer DFlash -- BeeLlama is no longer
-#                required for anything. Benchmarked 2026-08-11: BeeLlama and
-#                mainline are within 0.4% on MoE MTP decode (206.0 vs 204.9 t/s).
+#   binary       Everything runs on mainline (10358): it serves qwen35/qwen35moe
+#                MTP AND DFlash on both backends, plus Muse Glimmer DFlash.
+#                Benchmarked 2026-08-11: BeeLlama and mainline were within 0.4%
+#                on MoE MTP decode (206.0 vs 204.9 t/s); the BeeLlama v0.3.2
+#                tree was removed 2026-08-16 (KVarN superseded by f16 KV).
 #                See docs/QWEN36_SPECULATION_BACKEND_AUDIT.md.
 SPEC_MODE="none"
 DRAFT_TYPE_K=""
@@ -264,14 +263,7 @@ else
     esac
 fi
 
-if [[ "$ARCH" == "qwen38-27b" ]]; then
-    [[ "$BACKEND" == "vulkan" ]] && BINARY="$BIN_VULKAN" || BINARY="$BIN_MAINLINE"
-elif [[ ( "$SPEC_MODE" == "dflash" && "$ARCH" != "muse-glimmer" ) ||
-      ( "$SPEC_MODE" == "mtp" && "$BACKEND" == "vulkan" ) ]]; then
-    [[ "$BACKEND" == "vulkan" ]] && BINARY="$BIN_BEELLAMA_VULKAN" || BINARY="$BIN_BEELLAMA_032"
-else
-    [[ "$BACKEND" == "vulkan" ]] && BINARY="$BIN_VULKAN" || BINARY="$BIN_MAINLINE"
-fi
+[[ "$BACKEND" == "vulkan" ]] && BINARY="$BIN_VULKAN" || BINARY="$BIN_MAINLINE"
 
 # Vulkan MTP draft KV defaults to f16, which overflows VRAM at high context; pin q8_0.
 if [[ "$SPEC_MODE" == "mtp" && "$BACKEND" == "vulkan" ]]; then

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Benchmark llama-server backend/model/spec/KV-cache combinations safely.
 
-Matrix policy (2026-06): one row per **downloaded GGUF** × every spec mode that
-GGUF supports × backend (dflash is ROCm-only; base/mtp run on both) × KV in
-{q8_0, kvarn5/4}. Turbo and the kvarn4/2 / q5_0 / q4_0 sweeps were dropped —
-KVarN5/4 is the single retained KVarN point. Each GGUF is tested independently so
-weight-quant differences show up (e.g. MoE IQ4_NL vs Q4_K_M on Vulkan+MTP).
+Matrix policy (2026-08): one row per **downloaded GGUF** × every spec mode that
+GGUF supports × backend (dflash is ROCm-only; base/mtp run on both) × KV.
+The KVarN rows were dropped with the BeeLlama v0.3.2 tree (removed 2026-08-16;
+f16 KV superseded KVarN on dual-GPU). Rows whose GGUF is no longer downloaded
+are skipped at run time. Each GGUF is tested independently so weight-quant
+differences show up.
 """
 
 import argparse
@@ -27,20 +28,18 @@ LLAMA_SERVER_DIR = str(Path(__file__).resolve().parents[2])
 LLM_DIR = str(Path(__file__).resolve().parents[3])
 MODELS_DIR = f"{LLAMA_SERVER_DIR}/models"
 
-# Only mainline llama.cpp and BeeLlama v0.3.2 remain installed. The legacy
-# BeeLlama v0.3.1 and TurboQuant trees were deleted; nothing here references them.
-BIN_MAINLINE = f"{LLM_DIR}/llama.cpp/build/bin/llama-server"  # q8_0, MTP (ROCm)
-BIN_BEELLAMA_032 = (
-    f"{LLM_DIR}/llama.cpp-beellama-032-hip/build/bin/llama-server"  # KVarN, DFlash, MTP
-)
+# Only the mainline llama.cpp tree is installed (ROCm + Vulkan builds). The
+# legacy BeeLlama v0.3.2/v0.3.1 and TurboQuant trees were deleted; mainline
+# 10358 serves MTP, DFlash and adaptive-p speculation on both backends.
+BIN_MAINLINE = f"{LLM_DIR}/llama.cpp/build/bin/llama-server"  # ROCm: q8_0, MTP
 BIN_VULKAN = (
-    f"{LLM_DIR}/llama.cpp/build-vulkan/bin/llama-server"  # Vulkan mainline: q8_0 base
+    f"{LLM_DIR}/llama.cpp/build-vulkan/bin/llama-server"  # Vulkan mainline: base, MTP
 )
-BIN_BEELLAMA_VULKAN = f"{LLM_DIR}/llama.cpp-beellama-032-hip/build-vulkan/bin/llama-server"  # Vulkan + KVarN / MTP
 
 # Target models (each a distinct downloaded GGUF — all are benchmarked).
 MODEL_35B_MTP_IQ4 = f"{MODELS_DIR}/Qwen3.6-35B-A3B-MTP-UD-IQ4_NL.gguf"  # MoE+MTP, IQ4_NL
 MODEL_35B_MTP_Q4KM = f"{MODELS_DIR}/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"  # MoE+MTP, Q4_K_M
+MODEL_35B_MTP_Q8 = f"{MODELS_DIR}/Qwen3.6-35B-A3B-Q8_0.gguf"  # MoE+MTP, Q8_0 — current primary
 MODEL_35B_MOE = f"{MODELS_DIR}/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf"  # MoE plain, IQ4_NL
 MODEL_27B_MTP = f"{MODELS_DIR}/Qwen3.6-27B-MTP-Q4_K_M.gguf"  # dense+MTP, Q4_K_M
 MODEL_27B = f"{MODELS_DIR}/Qwen3.6-27B-IQ4_NL.gguf"  # dense plain, IQ4_NL
@@ -56,50 +55,33 @@ DEFAULT_CTX_K = 128
 #   quant : "q8_0" for symmetric K/V, OR ("kvarn5","kvarn4") for asymmetric KVarN
 #   spec  : "none" | "mtp" | "dflash"   (dflash drafter auto-picked by model arch)
 #   backend: "rocm" | "vulkan"
-KVARN54 = ("kvarn5", "kvarn4")  # the one KVarN we keep — q6-class quality, q4-class size
-
 CONFIGS = [
     # ══ GGUF: Qwen3.6-35B-A3B-MTP-UD-IQ4_NL  (MoE + MTP heads, IQ4_NL) ══════════
     ("MoE/IQ4(mtp) base q8_0", MODEL_35B_MTP_IQ4, "q8_0", "none", BIN_MAINLINE, "rocm"),
-    ("MoE/IQ4(mtp) base kvarn5/4", MODEL_35B_MTP_IQ4, KVARN54, "none", BIN_BEELLAMA_032, "rocm"),
     ("MoE/IQ4(mtp) +MTP q8_0", MODEL_35B_MTP_IQ4, "q8_0", "mtp", BIN_MAINLINE, "rocm"),
-    ("MoE/IQ4(mtp) +MTP kvarn5/4", MODEL_35B_MTP_IQ4, KVARN54, "mtp", BIN_BEELLAMA_032, "rocm"),
     ("MoE/IQ4(mtp) base q8_0 (vk)", MODEL_35B_MTP_IQ4, "q8_0", "none", BIN_VULKAN, "vulkan"),
-    ("MoE/IQ4(mtp) base kvarn5/4 (vk)", MODEL_35B_MTP_IQ4, KVARN54, "none", BIN_BEELLAMA_VULKAN, "vulkan"),
-    ("MoE/IQ4(mtp) +MTP q8_0 (vk)", MODEL_35B_MTP_IQ4, "q8_0", "mtp", BIN_BEELLAMA_VULKAN, "vulkan"),
-    ("MoE/IQ4(mtp) +MTP kvarn5/4 (vk)", MODEL_35B_MTP_IQ4, KVARN54, "mtp", BIN_BEELLAMA_VULKAN, "vulkan"),
+    ("MoE/IQ4(mtp) +MTP q8_0 (vk)", MODEL_35B_MTP_IQ4, "q8_0", "mtp", BIN_VULKAN, "vulkan"),
     # ══ GGUF: Qwen3.6-35B-A3B-UD-Q4_K_M  (MoE + MTP heads, Q4_K_M) ══════════════
     ("MoE/Q4KM(mtp) base q8_0", MODEL_35B_MTP_Q4KM, "q8_0", "none", BIN_MAINLINE, "rocm"),
-    ("MoE/Q4KM(mtp) base kvarn5/4", MODEL_35B_MTP_Q4KM, KVARN54, "none", BIN_BEELLAMA_032, "rocm"),
     ("MoE/Q4KM(mtp) +MTP q8_0", MODEL_35B_MTP_Q4KM, "q8_0", "mtp", BIN_MAINLINE, "rocm"),
-    ("MoE/Q4KM(mtp) +MTP kvarn5/4", MODEL_35B_MTP_Q4KM, KVARN54, "mtp", BIN_BEELLAMA_032, "rocm"),
     ("MoE/Q4KM(mtp) base q8_0 (vk)", MODEL_35B_MTP_Q4KM, "q8_0", "none", BIN_VULKAN, "vulkan"),
-    ("MoE/Q4KM(mtp) base kvarn5/4 (vk)", MODEL_35B_MTP_Q4KM, KVARN54, "none", BIN_BEELLAMA_VULKAN, "vulkan"),
-    ("MoE/Q4KM(mtp) +MTP q8_0 (vk)", MODEL_35B_MTP_Q4KM, "q8_0", "mtp", BIN_BEELLAMA_VULKAN, "vulkan"),
-    ("MoE/Q4KM(mtp) +MTP kvarn5/4 (vk)", MODEL_35B_MTP_Q4KM, KVARN54, "mtp", BIN_BEELLAMA_VULKAN, "vulkan"),
-    # ══ GGUF: Qwen3.6-35B-A3B-UD-IQ4_NL  (MoE plain — base + DFlash) ════════════
+    ("MoE/Q4KM(mtp) +MTP q8_0 (vk)", MODEL_35B_MTP_Q4KM, "q8_0", "mtp", BIN_VULKAN, "vulkan"),
+    # ══ GGUF: Qwen3.6-35B-A3B-Q8_0  (MoE + MTP heads, Q8_0 — current primary) ═══
+    ("MoE/Q8(mtp) base q8_0", MODEL_35B_MTP_Q8, "q8_0", "none", BIN_MAINLINE, "rocm"),
+    ("MoE/Q8(mtp) +MTP q8_0", MODEL_35B_MTP_Q8, "q8_0", "mtp", BIN_MAINLINE, "rocm"),
+    ("MoE/Q8(mtp) base q8_0 (vk)", MODEL_35B_MTP_Q8, "q8_0", "none", BIN_VULKAN, "vulkan"),
+    ("MoE/Q8(mtp) +MTP q8_0 (vk)", MODEL_35B_MTP_Q8, "q8_0", "mtp", BIN_VULKAN, "vulkan"),
+    # ══ GGUF: Qwen3.6-35B-A3B-UD-IQ4_NL  (MoE plain — base only) ════════════════
     ("MoE/IQ4 base q8_0", MODEL_35B_MOE, "q8_0", "none", BIN_MAINLINE, "rocm"),
-    ("MoE/IQ4 base kvarn5/4", MODEL_35B_MOE, KVARN54, "none", BIN_BEELLAMA_032, "rocm"),
-    ("MoE/IQ4 +DFlash q8_0", MODEL_35B_MOE, "q8_0", "dflash", BIN_BEELLAMA_032, "rocm"),
-    ("MoE/IQ4 +DFlash kvarn5/4", MODEL_35B_MOE, KVARN54, "dflash", BIN_BEELLAMA_032, "rocm"),
     ("MoE/IQ4 base q8_0 (vk)", MODEL_35B_MOE, "q8_0", "none", BIN_VULKAN, "vulkan"),
-    ("MoE/IQ4 base kvarn5/4 (vk)", MODEL_35B_MOE, KVARN54, "none", BIN_BEELLAMA_VULKAN, "vulkan"),
     # ══ GGUF: Qwen3.6-27B-MTP-Q4_K_M  (dense + MTP heads, Q4_K_M) ═══════════════
     ("27B/Q4KM(mtp) base q8_0", MODEL_27B_MTP, "q8_0", "none", BIN_MAINLINE, "rocm"),
-    ("27B/Q4KM(mtp) base kvarn5/4", MODEL_27B_MTP, KVARN54, "none", BIN_BEELLAMA_032, "rocm"),
     ("27B/Q4KM(mtp) +MTP q8_0", MODEL_27B_MTP, "q8_0", "mtp", BIN_MAINLINE, "rocm"),
-    ("27B/Q4KM(mtp) +MTP kvarn5/4", MODEL_27B_MTP, KVARN54, "mtp", BIN_BEELLAMA_032, "rocm"),
     ("27B/Q4KM(mtp) base q8_0 (vk)", MODEL_27B_MTP, "q8_0", "none", BIN_VULKAN, "vulkan"),
-    ("27B/Q4KM(mtp) base kvarn5/4 (vk)", MODEL_27B_MTP, KVARN54, "none", BIN_BEELLAMA_VULKAN, "vulkan"),
-    ("27B/Q4KM(mtp) +MTP q8_0 (vk)", MODEL_27B_MTP, "q8_0", "mtp", BIN_BEELLAMA_VULKAN, "vulkan"),
-    ("27B/Q4KM(mtp) +MTP kvarn5/4 (vk)", MODEL_27B_MTP, KVARN54, "mtp", BIN_BEELLAMA_VULKAN, "vulkan"),
-    # ══ GGUF: Qwen3.6-27B-IQ4_NL  (dense plain — base + DFlash) ═════════════════
+    ("27B/Q4KM(mtp) +MTP q8_0 (vk)", MODEL_27B_MTP, "q8_0", "mtp", BIN_VULKAN, "vulkan"),
+    # ══ GGUF: Qwen3.6-27B-IQ4_NL  (dense plain — base only) ═════════════════════
     ("27B/IQ4 base q8_0", MODEL_27B, "q8_0", "none", BIN_MAINLINE, "rocm"),
-    ("27B/IQ4 base kvarn5/4", MODEL_27B, KVARN54, "none", BIN_BEELLAMA_032, "rocm"),
-    ("27B/IQ4 +DFlash q8_0", MODEL_27B, "q8_0", "dflash", BIN_BEELLAMA_032, "rocm"),
-    ("27B/IQ4 +DFlash kvarn5/4", MODEL_27B, KVARN54, "dflash", BIN_BEELLAMA_032, "rocm"),
     ("27B/IQ4 base q8_0 (vk)", MODEL_27B, "q8_0", "none", BIN_VULKAN, "vulkan"),
-    ("27B/IQ4 base kvarn5/4 (vk)", MODEL_27B, KVARN54, "none", BIN_BEELLAMA_VULKAN, "vulkan"),
 ]
 
 PROMPT_CORPUS = (
@@ -298,9 +280,13 @@ def measure(port: int, prompt: str, label: str, max_tokens: int) -> dict | None:
         return None
     t = result.get("timings", {})
     measured = {
+        # pi-lens-ignore: ast-grep:unchecked-throwing-call-python
         "encode": float(t.get("prompt_per_second", 0.0)),
+        # pi-lens-ignore: ast-grep:unchecked-throwing-call-python
         "decode": float(t.get("predicted_per_second", 0.0)),
+        # pi-lens-ignore: ast-grep:unchecked-throwing-call-python
         "prompt_n": int(t.get("prompt_n", 0)),
+        # pi-lens-ignore: ast-grep:unchecked-throwing-call-python
         "predicted_n": int(t.get("predicted_n", 0)),
     }
     if measured["prompt_n"] <= 0 or measured["predicted_n"] < max_tokens:

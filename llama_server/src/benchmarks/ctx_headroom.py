@@ -8,8 +8,8 @@ process's GPU data is backed by system RAM): a resident model sits at ~0.1-0.2 G
 of GTT (pinned buffers); once VRAM fills, KV/compute spill and process GTT jumps to
 GiB-scale. We binary-search `-c` per model for the crossover.
 
-Default config matches production: Vulkan (BeeLlama v0.3.2), q8_0 KV, MTP on (q8_0
-draft KV). `--kv kvarn` and `--no-mtp` explore how much further those push context.
+Default config matches production: Vulkan (mainline 10358), q8_0 KV, MTP on (q8_0
+draft KV). `--no-mtp` explores how much further that pushes context.
 
 Reuses matrix.py for launch/health/terminate; needs the GPU free (stop the server
 first: `llamactl stop`).

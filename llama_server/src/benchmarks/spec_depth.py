@@ -4,18 +4,19 @@
 Question this answers: your production profile drafts 2 tokens per step
 (LLAMA_SPEC_DRAFT_N_MAX=2). Is decoding faster at 3/4/5/6?
 
-IMPORTANT — adaptive controller: BeeLlama defaults `dm_adaptive = true` with the
-PROFIT controller (common/common.h:392), so `--spec-draft-n-max` is only a
-*ceiling* — the server adapts the real draft depth per step within it (probing,
-EWMA raise/lower, recalibrated every 1024 tokens). Two regimes:
-  * --adaptive    (default): measures "does raising the ceiling help production?"
-                  Matches the production server. Effective depth != n_max.
-  * --no-adaptive : appends --no-spec-dm-adaptive so depth is pinned at n_max
-                  (with --spec-draft-p-min 0). Use this for a TRUE fixed-depth
-                  sweep — the clean form of the original question.
+IMPORTANT — adaptive controller: mainline 10358's adaptive-p controller is OFF
+by default (--adaptive-target < 0), so the production server runs with draft
+depth PINNED at --spec-draft-n-max. Two regimes:
+  * --no-adaptive (default): depth pinned at n_max (with --spec-draft-p-min 0).
+                  Matches the production server; a TRUE fixed-depth sweep —
+                  the clean form of the original question.
+  * --adaptive    : appends --adaptive-target 0.9 --adaptive-decay 0.9 to
+                  enable adaptive-p, measuring whether the controller beats a
+                  pinned depth at the same ceiling.
 
-Matrix: 3 MTP models x n_max in {2,3,4,5,6}, all on the production path
-(BeeLlama v0.3.2 Vulkan, q8_0 KV, q8_0 draft KV, flash-attn on, --no-context-shift).
+Matrix: the live single-GPU Vulkan MTP models x n_max in {2,3,4,5,6}, all on
+the production path (mainline 10358 Vulkan, q8_0 KV, q8_0 draft KV,
+flash-attn on, --no-context-shift).
 
 Measurement: one SHORT-context prompt, a long sustained generation
 (--decode-tokens, default 2048), repeated --repeats times (default 1) and
@@ -42,10 +43,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import matrix  # noqa: E402  (sibling module; reuse its proven helpers)
 
 # ── The sweep: production MTP GGUFs x speculation depth ────────────────────────
-# Only these three MTP models run on the Vulkan path in practice.
+# The MTP models currently downloaded that fit the single-GPU Vulkan path.
 MODELS = [
-    ("Qwen3.6-35B-A3B-MTP-UD-IQ4_NL", matrix.MODEL_35B_MTP_IQ4),  # MoE+MTP, IQ4_NL
-    ("Qwen3.6-35B-A3B-UD-Q4_K_M", matrix.MODEL_35B_MTP_Q4KM),  # MoE+MTP, Q4_K_M
+    ("Qwen3.6-35B-A3B-Q8_0", matrix.MODEL_35B_MTP_Q8),  # MoE+MTP, Q8_0 — current primary
     ("Qwen3.6-27B-MTP-Q4_K_M", matrix.MODEL_27B_MTP),  # dense+MTP, Q4_K_M
 ]
 DEFAULT_N_MAX = [2, 3, 4, 5, 6]
@@ -71,7 +71,7 @@ def build_server_cmd(
     physical_cores = matrix.physical_core_count()
     logical_threads = os.cpu_count() or physical_cores * 2
     cmd = [
-        matrix.BIN_BEELLAMA_VULKAN,
+        matrix.BIN_VULKAN,
         "-m", model_path,
         "--alias", "local",
         "--device", "Vulkan0",
@@ -95,10 +95,10 @@ def build_server_cmd(
         "--host", "127.0.0.1",
         "--log-colors", "off",
     ]
-    if not adaptive:
-        # Pin draft depth at exactly n_max (otherwise the PROFIT controller adapts
-        # within the ceiling and n_max stops meaning "depth").
-        cmd.append("--no-spec-dm-adaptive")
+    if adaptive:
+        # Enable mainline's adaptive-p controller (off by default; production
+        # runs pinned, so --no-adaptive needs no flag and is the default here).
+        cmd += ["--adaptive-target", "0.9", "--adaptive-decay", "0.9"]
     return cmd
 
 
@@ -266,9 +266,10 @@ def parse_args() -> argparse.Namespace:
         help="timed runs per config, averaged with stdev (default 1; use 5 to beat noise)",
     )
     parser.add_argument(
-        "--adaptive", action=argparse.BooleanOptionalAction, default=True,
-        help="adaptive draft-max controller. --adaptive (default) measures the "
-        "production ceiling; --no-adaptive pins depth = n_max for a true fixed-depth sweep",
+        "--adaptive", action=argparse.BooleanOptionalAction, default=False,
+        help="enable mainline's adaptive-p controller (--adaptive-target 0.9). "
+        "Default is OFF: depth pinned at n_max, matching the production server. "
+        "--adaptive measures whether adaptive-p beats a pinned depth.",
     )
     parser.add_argument(
         "--decode-tokens", type=int, default=DEFAULT_DECODE_TOKENS,
@@ -315,8 +316,8 @@ def main():
             problems = []
             if not os.path.isfile(path):
                 problems.append("model missing")
-            if not os.path.isfile(matrix.BIN_BEELLAMA_VULKAN) or not os.access(
-                matrix.BIN_BEELLAMA_VULKAN, os.X_OK
+            if not os.path.isfile(matrix.BIN_VULKAN) or not os.access(
+                matrix.BIN_VULKAN, os.X_OK
             ):
                 problems.append("binary missing/not executable")
             cmd = build_server_cmd(path, ctx_size, args.port, args.ubatch_size, n, args.adaptive)
@@ -372,8 +373,8 @@ def main():
                 print(f"\n[{i + 1}/{len(runs)}] SKIP {tag} — model missing: {model_path}")
                 record(na_row(name, n_max, args.adaptive, args.ctx_k, "model_missing"))
                 continue
-            if not os.path.isfile(matrix.BIN_BEELLAMA_VULKAN) or not os.access(
-                matrix.BIN_BEELLAMA_VULKAN, os.X_OK
+            if not os.path.isfile(matrix.BIN_VULKAN) or not os.access(
+                matrix.BIN_VULKAN, os.X_OK
             ):
                 print(f"\n[{i + 1}/{len(runs)}] SKIP {tag} — binary missing/not executable")
                 record(na_row(name, n_max, args.adaptive, args.ctx_k, "binary_missing"))
