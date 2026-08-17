@@ -68,7 +68,10 @@ LLAMA_MODEL="$LLAMA_SERVER_ROOT/models/Qwen3.8-27B-Q8_0.gguf"
 LLAMA_BACKEND="rocm"
 LLAMA_DEVICE="ROCm0,ROCm1"
 LLAMA_CONTEXT=262144
-LLAMA_UBATCH=512
+# 512 -> 256 on 2026-08-16, together with ts 1,1. See the DEPTH RETUNE block
+# below: ubatch was originally chosen at ~6k prompts, and the ranking inverts
+# once there is a real KV cache to attend over.
+LLAMA_UBATCH=256
 # Prompt-cache sizing, revised 2026-08-16 after repeated full-context reprocessing
 # (119,389 tokens / 96 s, ~8 times in one session; seen on BOTH Q8 models).
 #
@@ -88,6 +91,72 @@ LLAMA_UBATCH=512
 # of tokens; the failure being fixed costs 119,000.
 LLAMA_CACHE_RAM=24576
 
+# ============================================================================
+# DEPTH RETUNE 2026-08-16 (evening):  ts 28,37 / ub 512  ->  ts 1,1 / ub 256
+# ============================================================================
+# Everything below this block was tuned at ~6k-token prompts with an EMPTY KV
+# cache. That is not how this server is used -- real sessions run past 100k,
+# where a 135,390-token prompt was logged at 491 t/s against the ~1000 t/s the
+# shallow benchmarks reported. Prefill was re-tuned at depth using
+# `llama-bench -d 131072 -p 2048`, which prefills 131k and then times a chunk
+# on top, i.e. the marginal rate you actually feel.
+#
+# Measured at d131072 (f16 KV throughout, llama-bench, unspeculated):
+#     ts 28,37  ub 512   pp 282.57   tg 14.97      <- previously shipped
+#     ts 28,37  ub 1024  pp 251.17
+#     ts 28,37  ub 2048  pp 210.74                 (bigger ubatch is WORSE)
+#     ts 28,37  ub 384   pp 288.01
+#     ts 28,37  ub 256   pp 286.13
+#     ts 1,1    ub 512   pp 306.93   tg 15.31
+#     ts 1,1    ub 384   pp 314.81
+#     ts 1,1    ub 256   pp 315.79   tg 15.26      <- SHIPPED  (+11.8% / +1.9%)
+#     ts 20,45  ub 512   pp 243.78                 (KV onto R9700: much worse)
+#     ts 40,25  ub 512   OOM, XTX hit 24068        (do not retry)
+#
+# THE SPLIT MATTERS MORE THAN UBATCH AT DEPTH: 1,1 vs 20,45 is a 26% spread,
+# while ubatch 256 -> 512 moves ~2%. At depth the cost is dominated by reading
+# the KV cache, and KV lives on the GPU that owns its layers -- so the split is
+# really a KV-read balance, not just a weight-memory balance. ts 28,37 was
+# chosen for weight balance at zero depth, which is a different problem.
+#
+# Shallow performance is unaffected (llama-bench, d0):
+#     ts 28,37 ub 512   pp2048 1058.22   pp8192 1125.91   tg 20.00
+#     ts 1,1   ub 256   pp2048 1068.18   pp8192 1099.06   tg 20.33
+# +0.9% / -2.4% / +1.7%. A wash, so this replaces the profile rather than
+# shipping as a second preset.
+#
+# END-TO-END VALIDATION, this exact config with MTP and c=262144:
+#     130,001-token prefill  484.6 t/s
+#     decode                  29.21 t/s   (draft acceptance 70.5%)
+#     PEAK XTX UNDER LOAD    24,150 MiB
+#
+# *** MEMORY: 150 MiB OF MARGIN. READ THIS BEFORE CHANGING ANYTHING. ***
+# The ceiling on this host is 24,300 MiB (the XTX drives the desktop; past it
+# the compositor is evicted to GTT and the screen drops to ~3 fps).
+#   c=262144 at ts 1,1 allocates 23,927 MiB at load and peaks 24,150 UNDER LOAD.
+#   The +223 MiB delta is compute buffers plus the MTP draft context. A
+#   load-time-only VRAM check would call this safe when it is 150 MiB away.
+# Measured context ladder at ts 1,1 + f16 + ub 256 (load-time peak):
+#     196608 -> 21,754     229376 -> 22,845
+#     245760 -> 23,389     262144 -> 23,927
+# Scaling is linear at 33.2 MiB per 1k tokens.
+# If the desktop footprint grows (it has moved 1.7 -> 3.0 GiB in one session
+# before), DROP TO 245760 -- that buys 544 MiB back. Moving the display to the
+# motherboard iGPU frees ~1,970 MiB and makes this comfortable instead of tight.
+#
+# CAVEATS, stated plainly:
+#   - The 24,150 figure was measured TEXT-ONLY, without --mmproj. The vision
+#     tower is pinned to ROCm1 via MTMD_BACKEND_DEVICE and a 4K image was
+#     previously measured to leave the XTX untouched, so this should hold --
+#     but it has NOT been re-verified at ts 1,1. Watch the XTX on first image use.
+#   - The tg figures in the sweep table are UNSPECULATED (llama-bench cannot run
+#     MTP). Speculated decode was validated only in the end-to-end run above.
+#   - ub 256 sits inside the 65-256 range that upstream discussion #21043 flags
+#     as a 40x collapse risk on hybrid Qwen models. No collapse occurs here on
+#     ROCm; it is the fastest value tested. Do not "fix" it.
+# ============================================================================
+
+# Historic note (superseded by the block above):
 # f16 KV + ts 28,37, 2026-08-16.  Previously q8_0 at ts 1,1 ONLY because f16 KV
 # (8.7 -> ~17.4 GiB at 256k) did not fit with an even split.
 #
@@ -154,7 +223,7 @@ LLAMA_EXTRA_ARGS=(
     --device ROCm0,ROCm1
     --split-mode layer
     --cache-reuse 256
-    --tensor-split 28,37
+    --tensor-split 1,1
     --main-gpu 1
     --batch-size 6144
     --no-mmap

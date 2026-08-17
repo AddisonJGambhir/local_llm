@@ -5,8 +5,8 @@ dual-GPU AMD workstation:
 
 | GPU | Model | VRAM | Role |
 | --- | --- | --- | --- |
-| RX 7900 XTX (gfx1100, 24 GB) | — | 24 GB | Drives the desktop |
-| AI PRO R9700 (gfx1201, 32 GB) | — | 32 GB | Compute partner |
+| RX 7900 XTX (gfx1100, 24 GB) | N/A | 24 GB | Drives the desktop |
+| AI PRO R9700 (gfx1201, 32 GB) | N/A | 32 GB | Compute partner |
 
 ## Models in use
 
@@ -16,7 +16,7 @@ dual-GPU AMD workstation:
 | **Nemotron 3.5 Lightning** 30B-A3B Q8_0 | 33 GB | Mamba-2/attention MoE | spec off (upstream MTP hang), f16 KV | 94.6 (256k) / 94.7 (1M) | 3034 (256k) / 2555 (1M) | dual (ROCm) |
 | **Qwen3.8 27B** Q8_0 | 28 GB | Dense + vision | MTP n_max=3, f16 KV, dual-GPU | 35.0 vk / **38.5** rocm | 825 / **982** | dual |
 | **Muse Glimmer 30B** Q8_0 | 28 GB | Dense | DFlash n_max=2, f16 KV, dual-GPU | 31.7 vk / **33.2** rocm | 743 / **986** | dual |
-| Qwen3.6 27B-MTP Q4_K_M | 16 GB | Dense | MTP, q8_0 KV, single-GPU | ~73–76 (May harness) | — | single |
+| Qwen3.6 27B-MTP Q4_K_M | 16 GB | Dense | MTP, q8_0 KV, single-GPU | ~73–76 (May harness) | N/A | single |
 
 **Profile selection is workload-driven (2026-08-16 numbers):**
 
@@ -43,7 +43,7 @@ llamactl command             # print the resolved server command WITHOUT launchi
 
 The server listens on `http://127.0.0.1:1234/v1` (OpenAI-compatible), model alias `local`.
 
-> **Always free the GPU before benchmarking** (`llamakill`) — each profile
+> **Always free the GPU before benchmarking** (`llamakill`), each profile
 > may load onto either a single GPU or both.
 
 ---
@@ -61,19 +61,19 @@ llamactl  ──sources──►  src/server/common.sh        (load + validate p
                           └──spawns──►  ../llama.cpp*/build*/bin/llama-server
 ```
 
-- **`llamactl`** — the real CLI. Resolves a profile, builds the exact
+- **`llamactl`**, the real CLI. Resolves a profile, builds the exact
   `llama-server` command, starts it under the supervisor, polls `/health`, then
   prints the resolved command and a GPU-memory/spill report. Also does
   stop/restart/status/health/logs/command.
-- **`src/server/common.sh`** — `llama_load_profile` (defaults + validation) and
+- **`src/server/common.sh`**, `llama_load_profile` (defaults + validation) and
   `llama_build_command` (turns `LLAMA_*` vars into the argv).
-- **`src/server/supervisor.py`** — owns the child process and the rotating log
+- **`src/server/supervisor.py`**, owns the child process and the rotating log
   (`llama-server.log`, 50 MB × 5). PID files let `llamactl` manage only *its own*
   server, never an unrelated process on the port.
-- **`config/profiles/default.sh`** — the canonical production profile (35B MoE, Vulkan, single-GPU).
-- **`config/profiles/preset-36-35b-a3b-*-dual-*.sh`** — 35B MoE dual-GPU profiles (ROCm and Vulkan).
-- **`config/profiles/preset-38-27b-*-dual-*.sh`** — Qwen3.8 27B dual-GPU profiles.
-- **`src/server/sync_clients.py`** — best-effort push of alias/context into client
+- **`config/profiles/default.sh`**, the canonical production profile (35B MoE, Vulkan, single-GPU).
+- **`config/profiles/preset-36-35b-a3b-*-dual-*.sh`**, 35B MoE dual-GPU profiles (ROCm and Vulkan).
+- **`config/profiles/preset-38-27b-*-dual-*.sh`**, Qwen3.8 27B dual-GPU profiles.
+- **`src/server/sync_clients.py`**, best-effort push of alias/context into client
   configs after a healthy start.
 
 ### Front-ends (thin wrappers)
@@ -116,7 +116,7 @@ gpu memory [whole card]: VRAM 20.10/23.98 GiB (3.88 free) · GTT 0.20 GiB
 > **`command:`** line is read from `/proc/<pid>` and is the ground truth of what
 > is actually running. Trust `command:`.
 
-### `llamaserver` — interactive launcher
+### `llamaserver`, interactive launcher
 
 A top-level launcher with three paths:
 
@@ -133,7 +133,7 @@ A top-level launcher with three paths:
 | `default.sh` | 35B MoE Q8_0 | Vulkan | q8_0 | 256k | MTP | 2 | ~94¹ |
 | `preset-27b-q4km-q8-128k` | 27B MTP Q4_K_M | Vulkan | q8_0 | 128k | MTP | 4 | ~76¹ |
 | `preset-27b-q4km-rocm-q8-128k` | 27B MTP Q4_K_M | ROCm | q8_0 | 128k | MTP | 2 | ~49¹ |
-| `preset-36-27b-q4km-vulkan-xtx-only-128k` | 27B MTP Q4_K_M | Vulkan | q8_0 | 128k | MTP | 2 | — |
+| `preset-36-27b-q4km-vulkan-xtx-only-128k` | 27B MTP Q4_K_M | Vulkan | q8_0 | 128k | MTP | 2 | N/A |
 
 ¹ 2026-05 harness (pre-f16-KV era); re-measure before trusting. `default.sh` is the
 single-GPU fallback (ubatch 1024, q8_0 KV); the xtx-only preset is for when the
@@ -149,18 +149,18 @@ Large batch `6144–12288` (ROCm only; no-op on Vulkan).
 | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | --- |
 | `preset-36-35b-a3b-q8-rocm-dual-256k-textonly` | 35B MoE Q8_0 | ROCm | f16 | 256k | MTP | 2 | **3128** | **94.4** | 80.9% | 21.0 / 30.2 |
 | `preset-36-35b-a3b-q8-rocm-dual-q8-256k-mmproj` | 35B MoE Q8_0 + vision | ROCm | f16 | 256k | MTP | 2 | 3128 | 94.4 | 80.9% | 21.0 / 30.2 |
-| `preset-36-35b-a3b-q8-vulkan-dual-256k-textonly` | 35B MoE Q8_0 | Vulkan | f16 | 256k | MTP | 2 | 2072 | 93.7 | — | — |
-| `preset-36-35b-a3b-q8-vulkan-dual-q8-256k-mmproj` | 35B MoE Q8_0 + vision | Vulkan | f16 | 256k | MTP | 2 | 2072 | 93.7 | — | — |
+| `preset-36-35b-a3b-q8-vulkan-dual-256k-textonly` | 35B MoE Q8_0 | Vulkan | f16 | 256k | MTP | 2 | 2072 | 93.7 | N/A |, |
+| `preset-36-35b-a3b-q8-vulkan-dual-q8-256k-mmproj` | 35B MoE Q8_0 + vision | Vulkan | f16 | 256k | MTP | 2 | 2072 | 93.7 | N/A |, |
 | `preset-36-27b-q4km-rocm-dual-256k` | 27B MTP Q4_K_M | ROCm | f16 | 256k | MTP | 2 | 1408 | 36.9 | 69.8% | 19.7 / 20.9 |
-| `preset-36-27b-q4km-vulkan-dual-256k` | 27B MTP Q4_K_M | Vulkan | f16 | 256k | MTP | 2 | — | — | — | — |
+| `preset-36-27b-q4km-vulkan-dual-256k` | 27B MTP Q4_K_M | Vulkan | f16 | 256k | MTP | 2 | N/A |, | N/A |, |
 | `preset-38-27b-q8-rocm-dual-q8-256k-mmproj` | Qwen3.8 27B + vision | ROCm | f16 | 256k | MTP | 3 | 982 | 38.5 | 42–72% | 22.5 / 29.7 |
-| `preset-38-27b-q8-rocm-dual-256k-ppopt` | Qwen3.8 27B + vision | ROCm | q8_0 | 256k | MTP | 3 | — | — | — | — |
+| `preset-38-27b-q8-rocm-dual-256k-ppopt` | Qwen3.8 27B + vision | ROCm | q8_0 | 256k | MTP | 3 | N/A |, | N/A |, |
 | `preset-38-27b-q8-vulkan-dual-q8-256k-mmproj` | Qwen3.8 27B + vision | Vulkan | f16 | 256k | MTP | 3 | 825 | 35.0 | 53.8% | 22.2 / 29.4 |
 | `preset-muse-glimmer-30b-q8-rocm-dual-128k-dflash` | Muse Glimmer 30B | ROCm | f16 | 128k | DFlash | 2 | 986 | 33.2 | 58.5% | 18.2 / 16.5 |
 | `preset-muse-glimmer-30b-q8-rocm-dual-256k-yarn` | Muse Glimmer 30B | ROCm | f16 | 256k | DFlash | 2 | 891 | 34.1 | 3/3 @149k | 19.9 / 18.3 |
 | `preset-muse-glimmer-30b-q8-vulkan-dual-128k-dflash` | Muse Glimmer 30B | Vulkan | f16 | 128k | DFlash | 2 | 743 | 31.7 | 43.2% | 18.2 / 16.5 |
-| `preset-nemotron35-30b-a3b-q8-rocm-dual-256k` | Nemotron 3.5 30B | ROCm | f16 | 256k | off² | — | 3034 | 94.6 | n/a | 19.9 / 18.6 |
-| `preset-nemotron35-30b-a3b-q8-rocm-dual-1m` | Nemotron 3.5 30B | ROCm | f16 | **1M** | off² | — | 2555 | 94.7 | n/a | 19.9 / 29.4 |
+| `preset-nemotron35-30b-a3b-q8-rocm-dual-256k` | Nemotron 3.5 30B | ROCm | f16 | 256k | off² | N/A | 3034 | 94.6 | n/a | 19.9 / 18.6 |
+| `preset-nemotron35-30b-a3b-q8-rocm-dual-1m` | Nemotron 3.5 30B | ROCm | f16 | **1M** | off² | N/A | 2555 | 94.7 | n/a | 19.9 / 29.4 |
 
 ² Nemotron's built-in MTP hangs ~37% of generations (upstream bug). Speculation
 ships **off**; decode still hits 94+ t/s. The `mmproj` profiles pin the vision
@@ -216,8 +216,8 @@ Profiles are sourced shell files of `LLAMA_*` variables. Key ones (see
 The `preset-36-*` and `preset-38-*` files use **both GPUs** via ROCm (`HIP_VISIBLE_DEVICES=0,1`)
 or Vulkan (`HIP_VISIBLE_DEVICES=0,1`). They load on:
 
-- ROCm0 = RX 7900 XTX (24 GB) — also drives the desktop
-- ROCm1 = AI PRO R9700 (32 GB) — compute partner
+- ROCm0 = RX 7900 XTX (24 GB), also drives the desktop
+- ROCm1 = AI PRO R9700 (32 GB), compute partner
 
 **Key constraints:**
 
@@ -228,7 +228,7 @@ or Vulkan (`HIP_VISIBLE_DEVICES=0,1`). They load on:
   keeping ~0.9 GiB + the vision transient off the constrained XTX.
 - `LLAMA_CACHE_RAM=16384` doubles the default to hold more prompt-cache checkpoints.
   The hybrid DeltaNet models can only resume from stored checkpoints, not arbitrary positions.
-- `LLAMA_TIMEOUT=3600` is mandatory — llama-server reads `--timeout 0` as a zero-second
+- `LLAMA_TIMEOUT=3600` is mandatory, llama-server reads `--timeout 0` as a zero-second
   socket timeout, which kills large requests with an empty 400 and no log.
 
 ### MTP speculation depth (measured, not guessed)
@@ -241,7 +241,7 @@ Draft depth is **not portable** across models. Each model and backend has its ow
 | 35B MoE (ROCm) | **2** | **94.4** | MoE decode step is fast (7.5 ms @ batch-1); deeper drafts cost more in the verify pass than they save. |
 | 35B MoE (Vulkan) | **2** | **93.7** | Same MoE reason; Vulkan verify is cheaper but n_max=3 still collapses. |
 | 27B Dense (Vulkan) | **3** | 35.0 | Dense decode step is expensive; deeper drafts pay off until n=4 which collapses. |
-| 27B Dense (ROCm) | **2** | 36.9 | ROCm verify pass scaling differs — n_max=3 gains marginal, n_max=4 collapses. |
+| 27B Dense (ROCm) | **2** | 36.9 | ROCm verify pass scaling differs, n_max=3 gains marginal, n_max=4 collapses. |
 | Muse Glimmer (ROCm) | **2** | 33.2 | DFlash on this box: n-max sweep 1/2/4/8/15 → acceptance 60.5/43.6/21.7/11.9/6.5%. Upstream recommends 15; it measures **worst** here (was the optimal for Q5_K_M on a **single** GPU). |
 | Muse Glimmer (Vulkan) | **2** | 31.7 | Same drafter; dual-GPU verify cost favors shallow depth on both backends. |
 
@@ -262,7 +262,7 @@ prefill from 1319 to 2332 t/s (+77%) with zero decode cost (June 2026).
 | 27B Dense @128k | 1024 | 808 | ~82 | 0.56 GiB |
 
 The current shape: ROCm dual-GPU profiles use **ubatch 512** and **batch-size 6144–12288**
-(+13% prefill, ROCm-only — a measured no-op on Vulkan, confirmed on three models).
+(+13% prefill, ROCm-only, a measured no-op on Vulkan, confirmed on three models).
 Vulkan stays at batch 2048 (no-op above that). The 35B dual uses ubatch 1024 because
 the second GPU provides the headroom. The table above is historical; the 512/1024
 comparison is still correct but the final operating point was re-tuned on the
@@ -284,10 +284,10 @@ BeeLlama v0.3.2 was removed 2026-08-16.
 
 ## Speculative decoding
 
-### MTP (self-speculation) — the production path
+### MTP (self-speculation), the production path
 
 The MTP-head models draft their own next tokens; accepted drafts skip a forward pass.
-**`--spec-draft-n-max` is the pinned draft depth on mainline** — the adaptive-p
+**`--spec-draft-n-max` is the pinned draft depth on mainline**, the adaptive-p
 controller (`--adaptive-target`, off by default) is the only thing that can vary
 the effective depth, and production runs with it off.
 
@@ -298,11 +298,11 @@ Key points:
   n_max=3 → 86.08 t/s vs n_max=2 → 95.33 t/s (Vulkan, fixed-depth sweep).
 - On the dense 27B Vulkan, `n_max=3` is optimal. The slower dense decode (25.87 ms
   at batch-1) justifies the deeper draft. n_max=4 → 73.5 t/s, n_max=3 → 75.93 t/s.
-- Speculation is disabled by tool grammars and reasoning budgets — by design.
+- Speculation is disabled by tool grammars and reasoning budgets, by design.
   A drafted token could violate the grammar → malformed tool call/JSON.
   No override flag exists.
 
-### DFlash — Muse Glimmer only
+### DFlash, Muse Glimmer only
 
 Muse Glimmer uses the `dflash-kquant.gguf` sidecar with mainline ROCm or Vulkan.
 It drafts blocks of up to 15 tokens; on this box the optimal n_max is **2 on both
@@ -315,7 +315,7 @@ drafts; dual-GPU penalizes them). DFlash and MTP are mutually exclusive.
 > rejected by both engines (`dflash-draft` vs `dflash` arch mismatch); new sidecars
 > exist but MTP still wins.
 
-### Known limitation — post-image prefill regression
+### Known limitation, post-image prefill regression
 
 Sending **a single image** to a dual-GPU profile permanently drops text prefill ~31–40%
 until the server is restarted. Decode is unaffected. Confirmed on both 35B and 27B
@@ -328,7 +328,7 @@ Workaround: restart the server after heavy image use, or run a text-only profile
 ## KV cache types
 
 | Type | Notes |
-| `f16` | full-float KV — the **standing default (2026-08-16)**. Raises speculative
+| `f16` | full-float KV, the **standing default (2026-08-16)**. Raises speculative
   acceptance (quantized KV makes drafter and target disagree): Muse 43.6→58.5%,
   +19% decode. Use q8_0 only where f16 genuinely does not fit, and record why. |
 | `q8_0` | symmetric 8-bit KV; used only where f16 does not fit (single-GPU 24 GB cards,
@@ -342,15 +342,15 @@ Workaround: restart the server after heavy image use, or run a text-only profile
 ## GPU memory & spill detection
 
 The RX 7900 XTX drives the desktop. When VRAM fills, the amdgpu/RADV driver silently
-backs allocations with GTT (system RAM) — llama.cpp still reports them as on-GPU,
+backs allocations with GTT (system RAM), llama.cpp still reports them as on-GPU,
 so decode quietly collapses.
 
 `llamactl` surfaces spill two ways:
 
-- **whole-card** sysfs (`mem_info_vram_*`, `mem_info_gtt_*`) — context only; GTT
+- **whole-card** sysfs (`mem_info_vram_*`, `mem_info_gtt_*`), context only; GTT
   always has a baseline from the desktop + pinned buffers.
 - **per-process** amdgpu **`fdinfo`** (`drm-memory-vram` / `drm-memory-gtt` of the
-  real `llama-server` pid) — the direct, desktop-noise-free measure of how much of
+  real `llama-server` pid), the direct, desktop-noise-free measure of how much of
   *this server* is in VRAM vs system RAM.
 
 > **Vulkan RADV GTT is misleading.** RADV exposes a 29.71 GiB host-visible heap by design.
@@ -360,7 +360,7 @@ so decode quietly collapses.
 > backend always reports elevated GTT. Trust VRAM headroom, not GTT, for Vulkan.
 
 > `common_fit_params: failed to fit params to free device memory … abort` is **NOT** a
-> spill signal — it's the auto-layer-fit routine bailing out because `-ngl` is
+> spill signal, it's the auto-layer-fit routine bailing out because `-ngl` is
 > user-forced. Ignore it; trust the fdinfo/VRAM numbers.
 
 ---
@@ -390,12 +390,12 @@ dual-GPU headroom makes these ceilings moot for the tuned profiles.
 
 | Model | KV | Max context | Spills by | procVRAM |
 | --- | --- | ---: | ---: | ---: |
-| 35B MoE Q8_0 | q8_0 | ≥256k | — | 20.10 GiB |
-| 35B MoE Q8_0 | f16 | ≥256k | — | 20.66 GiB |
+| 35B MoE Q8_0 | q8_0 | ≥256k | N/A | 20.10 GiB |
+| 35B MoE Q8_0 | f16 | ≥256k | N/A | 20.66 GiB |
 | 35B MoE Q4_K_M | q8_0 | ~136k | 144k | 22.49 GiB |
 | 35B MoE Q4_K_M | kvarn5/4 | **190k** | 224k | 23.02 GiB |
 | 27B MTP Q4_K_M | q8_0 | **195k** | 216k | 23.28 GiB |
-| 27B MTP Q4_K_M | kvarn5/4 | **220k** | — | 22.59 GiB |
+| 27B MTP Q4_K_M | kvarn5/4 | **220k** | N/A | 22.59 GiB |
 
 ---
 
@@ -403,11 +403,11 @@ dual-GPU headroom makes these ceilings moot for the tuned profiles.
 
 | GGUF | Size | Type |
 | --- | ---: | --- |
-| `Qwen3.6-35B-A3B-Q8_0.gguf` | 36 GB | MoE + MTP, Q8_0 — **dual-GPU primary** |
-| `NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q8_0.gguf` | 33 GB | Mamba-2/attention MoE — **dual-GPU shipped (spec off)** |
-| `Qwen3.8-27B-Q8_0.gguf` | 28 GB | Dense + MTP + vision — **dual-GPU (ROCm + Vulkan)** |
-| `Muse-Glimmer-30B-Q8_0.gguf` | 28 GB | Dense + DFlash — **dual-GPU (ROCm + Vulkan, YaRN 256k variant)** |
-| `Qwen3.6-27B-MTP-Q4_K_M.gguf` | 16 GB | Dense + MTP, Q4_K_M — **single-GPU** |
+| `Qwen3.6-35B-A3B-Q8_0.gguf` | 36 GB | MoE + MTP, Q8_0, **dual-GPU primary** |
+| `NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q8_0.gguf` | 33 GB | Mamba-2/attention MoE, **dual-GPU shipped (spec off)** |
+| `Qwen3.8-27B-Q8_0.gguf` | 28 GB | Dense + MTP + vision, **dual-GPU (ROCm + Vulkan)** |
+| `Muse-Glimmer-30B-Q8_0.gguf` | 28 GB | Dense + DFlash, **dual-GPU (ROCm + Vulkan, YaRN 256k variant)** |
+| `Qwen3.6-27B-MTP-Q4_K_M.gguf` | 16 GB | Dense + MTP, Q4_K_M, **single-GPU** |
 | `dflash-kquant.gguf` | 1.6 GB | Muse Glimmer DFlash sidecar |
 | `mmproj-Qwen3.6-35B-A3B-BF16.gguf` | 862 MB | Qwen3.6 vision projector |
 | `mmproj-BF16.gguf` | 889 MB | Qwen3.8 vision projector |
@@ -430,10 +430,10 @@ dual-GPU headroom makes these ceilings moot for the tuned profiles.
 `integrations/agent_tools/local-llm-mcp.js` is a read-only MCP bridge that lets coding
 harnesses delegate bounded analysis tasks to the local Qwen model:
 
-- **`local_llm_chat`** — One prompt + optional system instructions. For summaries,
+- **`local_llm_chat`**, One prompt + optional system instructions. For summaries,
   alternatives, log analysis, second opinions.
-- **`local_llm_context`** — Continue a supplied multi-turn conversation.
-- **`local_llm_status`** — Verify the local llama.cpp endpoint is reachable.
+- **`local_llm_context`**, Continue a supplied multi-turn conversation.
+- **`local_llm_status`**, Verify the local llama.cpp endpoint is reachable.
 
 Default: `LOCAL_LLM_BASE_URL=http://127.0.0.1:1234/v1`, `LOCAL_LLM_MODEL=local`,
 timeout 300s, max_tokens 2048.
@@ -446,7 +446,7 @@ timeout 300s, max_tokens 2048.
 knowledge graph (SQLite per-project in `~/.cache/codebase-memory-mcp/`) for structural
 queries: call-path tracing, symbol search, architecture visualization.
 
-- 8 MCP tools, ~3k tokens of schemas — safe for local Qwen models
+- 8 MCP tools, ~3k tokens of schemas, safe for local Qwen models
 - `auto_watch` is on by default: re-syncs on file changes
 - CLI mode: `codebase-memory-mcp cli index_repository --repo_path /path/to/repo`
 - Visualization UI at `--ui=true` (port 9749)

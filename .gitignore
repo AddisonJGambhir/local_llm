@@ -28,3 +28,6 @@ integrations/pi-emote/
 
 # OS cruft
 .DS_Store
+
+# machine-specific compiled kernel caches (rebuildable via hipfire install)
+**/.hipfire_kernels/

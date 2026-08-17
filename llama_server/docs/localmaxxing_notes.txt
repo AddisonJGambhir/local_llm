@@ -1,0 +1,11 @@
+Dual AMD, mixed architecture: RX 7900 XTX (gfx1100, RDNA3) + AI PRO R9700 (gfx1201, RDNA4). ROCm 7.1, both PCIe x16. Layer split, -ts 1,1, -mg 1.
+
+Full 262144 context at f16 KV (17408 MB), no KV quantization.
+
+Output tok/s is with the model's built-in MTP head (--spec-type draft-mtp --spec-draft-n-max 3), ~47% draft acceptance on non-repetitive prose. Unspeculated decode on the same config is 20.3 tok/s, so MTP is worth ~+80%. Prefill figure is llama-bench pp8192 on the identical flags.
+
+Tuned at DEPTH rather than cold-cache. Using llama-bench -d 131072 -p 2048, -ub 256 -ts 1,1 gives 315.8 t/s vs 282.6 for the shallow-tuned -ub 512 -ts 28,37. Larger ubatch is worse at depth (1024 -> 251, 2048 -> 211). Split matters ~10x more than ubatch there, because at depth the cost is reading KV and KV lives on the GPU owning its layers.
+
+Built with -DGGML_HIP_ROCWMMA_FATTN=OFF (faster on this pair). Pinned to b10358; b10450 measured -4.8% pp / -4.0% tg after -funsafe-math-optimizations was removed from the HIP build (#26696).
+
+VRAM-bound: the XTX also drives the desktop and must stay under ~24300 MiB. This config peaks 24212 on a ~2.8k prompt. Larger prompts push it over, so -c 245760 is the safer daily setting.

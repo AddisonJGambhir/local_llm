@@ -1,10 +1,10 @@
-## ⏩ HANDOFF — CURRENT STATUS (2026-06-10, ~23:30)
+## ⏩ HANDOFF, CURRENT STATUS (2026-06-10, ~23:30)
 
 Goal in flight: **MoE (Qwen3.6-35B-A3B) + DFlash + KVarN** on the 7900 XTX. Most of it WORKS.
 
 **Done & verified:**
 - ✅ MoE DFlash drafter downloaded: `~/Desktop/local_llm/llama_server/models/qwen36-35b-a3b-dflash-IQ4_XS.gguf` (266 MB).
-  The 27B drafter does NOT work with the MoE — this is the right one.
+  The 27B drafter does NOT work with the MoE, this is the right one.
 - ✅ BeeLlama **v0.3.2 Preview** built at `~/Desktop/local_llm/llama.cpp-beellama-032-hip/`
   (tag `preview-v0.3.2`, commit `98caf25`). Binary: `build/bin/llama-server`.
 - ✅ gfx1100 `simm16` turbo-FA overflow recurred (same as v0.3.1) and was FIXED with the stub
@@ -21,7 +21,7 @@ Goal in flight: **MoE (Qwen3.6-35B-A3B) + DFlash + KVarN** on the 7900 XTX. Most
 
 **NEXT STEP (was interrupted here):** run a longer completion against the KVarN+DFlash server to
 (a) confirm generation stays coherent and (b) measure decode t/s vs the KVarN-alone 100.6 baseline
-to see DFlash's actual speedup. The server **may still be running on port 1235** — check with
+to see DFlash's actual speedup. The server **may still be running on port 1235**, check with
 `curl -sf http://127.0.0.1:1235/health`; kill with `fuser -k 1235/tcp` when done. Launch cmd is in
 §3 below (smoke test 2b). Test prompt that was about to run:
 ```bash
@@ -39,7 +39,7 @@ chart shows ~turbo3-level KLD). Worth benchmarking both.
 **Remaining TODO after verification:** add a MoE+DFlash+KVarN option to
 `llama_cpp_server_launch.sh` (new menu entry → v0.3.2 binary, plain MoE target
 `Qwen3.6-35B-A3B-UD-IQ4_NL.gguf`, `--cache-type-k kvarn5 --cache-type-v kvarn4`, the dflash flags,
-`--spec-dflash-cross-ctx 1024`). NOTE: DFlash and MTP are mutually exclusive — use the **plain MoE**
+`--spec-dflash-cross-ctx 1024`). NOTE: DFlash and MTP are mutually exclusive, use the **plain MoE**
 target, not the MTP variant.
 
 ---
@@ -56,7 +56,7 @@ and "KVarN KV Cache: Implementation and Benchmarks".
 
 ---
 
-## 0. Why bother — read the chart first
+## 0. Why bother, read the chart first
 
 Axes: **X = KV cache size (MiB)** (smaller = less VRAM), **Y = mean KLD** (lower = closer to
 fp16, i.e. better quality). Lower-left is the ideal corner.
@@ -68,17 +68,17 @@ The thing that should make us switch:
 | **`turbo3` (current default)** | ~800 MiB | **~0.012** | **worst quality point on the whole chart** |
 | `turbo4` | ~1050 MiB | ~0.0047 | |
 
-KVarN sits on the Pareto frontier — it gets q5/q6-class quality at q4-class size:
+KVarN sits on the Pareto frontier, it gets q5/q6-class quality at q4-class size:
 
 | KVarN pair (K-V) | Size | KLD | Beats… |
 |---|---|---|---|
 | `kvarn3-kvarn3` | ~890 MiB | ~0.0053 | same size as turbo3, **~2.3× better KLD** |
 | `kvarn4-kvarn3` | ~1010 MiB | ~0.0038 | small bump, **~3× better than turbo3** |
 | `kvarn4-kvarn4` | ~1120 MiB | ~0.0029 | smaller **and** better than `q5_0` (1410/0.0032) |
-| `kvarn5-kvarn4` | ~1250 MiB | ~0.0028 | sweet spot — q6-class quality, q4-class size |
+| `kvarn5-kvarn4` | ~1250 MiB | ~0.0028 | sweet spot, q6-class quality, q4-class size |
 | `kvarn6-kvarn5` | ~1410 MiB | ~0.0026 | matches `q6_0` quality at less size |
-| `kvarn8-kvarn8` | ~2170 MiB | ~0.0023 | ties `q8_0` (best quality, same size — no win) |
-| `kvarn4-kvarn2` | ~880 MiB | ~0.0104 | smallest KVarN but ~turbo3-bad — **avoid** |
+| `kvarn8-kvarn8` | ~2170 MiB | ~0.0023 | ties `q8_0` (best quality, same size, no win) |
+| `kvarn4-kvarn2` | ~880 MiB | ~0.0104 | smallest KVarN but ~turbo3-bad, **avoid** |
 
 **Takeaway:** for ~the same VRAM we spend on `turbo3` today, `kvarn3-kvarn3` roughly halves the
 quality loss; for a ~200–450 MiB bump, `kvarn4-kvarn4` / `kvarn5-kvarn4` get us to q5/q6 quality.
@@ -98,7 +98,7 @@ That's free context-quality on the exact hardware we already have.
   ```
 - Levels: `kvarn2 | kvarn3 | kvarn4 | kvarn5 | kvarn6 | kvarn8` (number ≈ effective bits/precision;
   higher = bigger + better quality). 9 valid K/V combinations.
-- Works on **128-slice-compatible heads** — Qwen3.6-27B's 128-dim heads qualify. Larger heads are
+- Works on **128-slice-compatible heads**, Qwen3.6-27B's 128-dim heads qualify. Larger heads are
   treated as multiple pseudo-heads. Runtime validates unsupported placements and aborts cleanly.
 - **AMD path exists**: the v0.3.2 notes explicitly add "KVarN support for ROCm/HIP and Vulkan",
   with a "low-shared-memory store path optimized for AMD hardware constraints." So this is meant
@@ -119,7 +119,7 @@ git clone --branch preview-v0.3.2 --depth 1 \
 cd llama.cpp-beellama-032-hip
 ```
 
-### gfx1100 build — reuse our v0.3.1 workaround if needed
+### gfx1100 build, reuse our v0.3.1 workaround if needed
 The v0.3.2 notes claim AMD KVarN support, but the **turbo FA simm16 branch overflow** that bit us
 on v0.3.1 may still be present (it's a separate kernel family). Build the normal way first:
 
@@ -132,10 +132,10 @@ cmake --build build --config Release -j
 
 - **If it builds:** great, the preview fixed it or doesn't trigger it.
 - **If it dies with "branch size exceeds simm16"** on `fattn-*turbo*` kernels: re-apply our v0.3.1
-  fix — copy `gen_hip_turbo_stubs.py` from `../llama.cpp-beellama-hip/`, run it to regenerate the
+  fix, copy `gen_hip_turbo_stubs.py` from `../llama.cpp-beellama-hip/`, run it to regenerate the
   55 stub `.cu` files, and port the CMakeLists stub-swap block in
   `ggml/src/ggml-hip/CMakeLists.txt`. KVarN kernels are a *different* family and should NOT be
-  stubbed — only stub the `*turbo*` FA files exactly as before.
+  stubbed, only stub the `*turbo*` FA files exactly as before.
 
 Binary lands at `build/bin/llama-server`.
 
@@ -161,7 +161,7 @@ Confirm: (a) it loads without "unsupported placement" abort, (b) `/health` retur
 `--cache-type-k/-v`. KVarN needs **independent K and V** values, which the current single-`quant`
 field can't express. Two options:
 
-- **Quick:** for symmetric pairs (`kvarn4-kvarn4`, etc.) the single field works as-is — pass
+- **Quick:** for symmetric pairs (`kvarn4-kvarn4`, etc.) the single field works as-is, pass
   `"kvarn4"` and it sets both K and V the same.
 - **Proper:** widen the tuple to allow `quant` to be either a string (symmetric) or a
   `(k, v)` tuple, and have `build_server_cmd` split it. Asymmetric winners (`kvarn5-kvarn4`,
@@ -184,27 +184,27 @@ rows on the 27B Q4_K_M model at 64k (matches the article's test context) and 128
 # repeat the kvarn5/4 + kvarn4/4 winners at 128k to confirm VRAM headroom
 ```
 
-The benchmark only measures **size (VRAM) + speed (t/s)** — it does NOT measure KLD/quality.
+The benchmark only measures **size (VRAM) + speed (t/s)**, it does NOT measure KLD/quality.
 The chart already gives us quality; our job here is to confirm the VRAM numbers hold on a 24 GB
 7900 XTX and that decode t/s isn't worse than turbo. (KVarN being heavier math than turbo could
-cost a few t/s — that's the tradeoff to watch.)
+cost a few t/s, that's the tradeoff to watch.)
 
 ---
 
 ## 5. Open questions to settle during the run
 
 1. Does the preview build on gfx1100 clean, or does it still need the turbo-FA stubs?
-2. KVarN decode t/s vs turbo3/turbo4 — is the quality win worth any speed cost?
+2. KVarN decode t/s vs turbo3/turbo4, is the quality win worth any speed cost?
 3. Can `kvarn5-kvarn4` hold **128k** context on 24 GB alongside the Q4_K_M weights (16 GB)?
 4. KVarN + speculative decoding (confirmed from v0.3.2 changelog + KVarN article):
    - **DFlash + KVarN: explicitly supported.** "Target-only KVarN parameters are cleared from
-     DFlash draft contexts so draft setup stays independent" — KVarN compresses the *target* KV,
+     DFlash draft contexts so draft setup stays independent", KVarN compresses the *target* KV,
      draft runs on its own path. They tuned "DFlash + KVarN visible context sizing".
    - **MTP + KVarN: no documented blocker, but not explicitly tested.** The rollback machinery any
      spec decoder needs (`seq_rm`, prompt-cache rollback) is implemented for the full-KVarN path.
-     Treat as "should work — verify with a launch smoke test" for the dense-27B + kvarn + MTP combo
+     Treat as "should work, verify with a launch smoke test" for the dense-27B + kvarn + MTP combo
      we'd ship. Watch the unified-vs-non-unified stream edge (KVarN forces non-unified streams).
-   - **NOT supported: hybrid cache** — mixing a standard type and KVarN across K/V
+   - **NOT supported: hybrid cache**, mixing a standard type and KVarN across K/V
      (e.g. `--cache-type-k q8_0 --cache-type-v kvarn4`). Keep both sides KVarN. This is a cache
      limitation, unrelated to spec decoding.
 

@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# hipfirectl -- supervisor for the hipfire engine, parallel to llama_server's
+# llamactl. Separate engine, separate tooling: hipfire is not llama.cpp, uses
+# its own HFQM weight format, its own daemon protocol, and its own port.
+#
+# Usage:
+#   hipfirectl start [profile]     start the daemon (detached)
+#   hipfirectl stop                stop it
+#   hipfirectl restart [profile]   stop then start
+#   hipfirectl status              process, model, GPU, health
+#   hipfirectl logs [n]            tail the serve log
+#   hipfirectl bench [args...]     benchmark the profile's model
+#   hipfirectl models              local + remote registry
+#   hipfirectl doctor              hipfire diag + kernel cache check
+#   hipfirectl env                 print the resolved environment
+#   hipfirectl exec <args...>      run any hipfire subcommand with env set
+#
+# Every path goes through config/env.sh. Calling the raw `hipfire` binary
+# without it WILL fail on this host -- see docs/NOTES.md.
+
+set -uo pipefail
+
+HIPFIRE_SERVER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export HIPFIRE_SERVER_ROOT
+
+PROFILE_DIR="$HIPFIRE_SERVER_ROOT/config/profiles"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/hipfire"
+mkdir -p "$STATE_DIR"
+ACTIVE_PROFILE_LINK="$STATE_DIR/active-profile"
+
+die() { printf 'hipfirectl: %s\n' "$*" >&2; exit 1; }
+
+load_profile() {
+    local name="${1:-}"
+    if [ -z "$name" ]; then
+        if [ -f "$ACTIVE_PROFILE_LINK" ]; then
+            name="$(cat "$ACTIVE_PROFILE_LINK")"
+        else
+            name="qwen38-27b-mq4r"
+        fi
+    fi
+    name="${name%.sh}"
+    local f="$PROFILE_DIR/$name.sh"
+    [ -f "$f" ] || die "no such profile: $name (have: $(ls "$PROFILE_DIR" 2>/dev/null | sed 's/\.sh$//' | tr '\n' ' '))"
+    # shellcheck disable=SC1090
+    source "$f"
+    ACTIVE_PROFILE="$name"
+    printf '%s' "$name" > "$ACTIVE_PROFILE_LINK"
+}
+
+# Resolve the running daemon PID. hipfire ps is authoritative; fall back to a
+# pgrep that cannot match this script itself.
+daemon_pid() {
+    pgrep -f "$HOME/.hipfire/bin/daemon" 2>/dev/null | head -1
+}
+
+cmd_start() {
+    load_profile "${1:-}"
+    if [ -n "$(daemon_pid)" ]; then
+        echo "already running (pid $(daemon_pid)); use restart"
+        return 0
+    fi
+
+    # Refuse to fight llama-server for VRAM rather than OOM halfway through a load.
+    local free_mib
+    free_mib=$(( ( $(cat /sys/class/drm/card0/device/mem_info_vram_total) \
+                 - $(cat /sys/class/drm/card0/device/mem_info_vram_used) ) / 1048576 ))
+    if [ "$free_mib" -lt 18000 ]; then
+        echo "WARNING: only ${free_mib} MiB free on the R9700 (card0)."
+        echo "         ${HIPFIRE_MODEL} needs roughly 16-17 GiB."
+        if curl -sf -m 3 http://127.0.0.1:1234/health >/dev/null 2>&1; then
+            echo "         llama-server is running on :1234 and holding it."
+            echo "         Stop it first:  cd ../llama_server && bin/llamactl stop"
+        fi
+        die "refusing to start into insufficient VRAM"
+    fi
+
+    local args=( serve --detach --model "$HIPFIRE_MODEL" "$HIPFIRE_HOST:$HIPFIRE_PORT" )
+    [ "${HIPFIRE_TP:-1}" != "1" ]                  && args+=( --tp "$HIPFIRE_TP" )
+    [ -n "${HIPFIRE_CONTINUOUS_BATCH_SIZE:-}" ]    && args+=( --continuous-batch-size "$HIPFIRE_CONTINUOUS_BATCH_SIZE" )
+    [ -n "${HIPFIRE_IDLE_TIMEOUT:-}" ]             && args+=( --idle-timeout "$HIPFIRE_IDLE_TIMEOUT" )
+    [ -n "${HIPFIRE_KV_MODE:-}" ]                  && args+=( --kv-mode "$HIPFIRE_KV_MODE" )
+    [ -n "${HIPFIRE_KV_BACKEND:-}" ]               && args+=( --kv-backend "$HIPFIRE_KV_BACKEND" )
+
+    echo "profile: $ACTIVE_PROFILE"
+    echo "model:   $HIPFIRE_MODEL"
+    echo "gpu:     HIP $HIP_VISIBLE_DEVICES ($HIPFIRE_TARGET_ARCH)"
+    echo "command: hipfire ${args[*]}"
+    hipfire "${args[@]}" || die "serve failed (see: hipfirectl logs)"
+
+    for _ in $(seq 1 60); do
+        curl -sf -m 3 "http://$HIPFIRE_HOST:$HIPFIRE_PORT/v1/models" >/dev/null 2>&1 && {
+            echo "ready on http://$HIPFIRE_HOST:$HIPFIRE_PORT"; return 0; }
+        sleep 5
+    done
+    die "did not become ready; hipfirectl logs"
+}
+
+cmd_stop() {
+    load_profile "${1:-}" 2>/dev/null || true
+    hipfire stop 2>&1 | sed 's/^/  /'
+    sleep 2
+    local p; p="$(daemon_pid)"
+    [ -n "$p" ] && { echo "  daemon $p still up, terminating"; kill "$p" 2>/dev/null; sleep 3; kill -9 "$p" 2>/dev/null; }
+    echo "stopped"
+}
+
+cmd_status() {
+    load_profile "${1:-}" 2>/dev/null || true
+    echo "profile:  ${ACTIVE_PROFILE:-<none>}"
+    echo "endpoint: http://$HIPFIRE_HOST:$HIPFIRE_PORT"
+    echo "log:      $HIPFIRE_LOG"
+    local p; p="$(daemon_pid)"
+    if [ -n "$p" ]; then
+        echo "daemon:   pid $p"
+        # Ground truth, not a cached profile file. llamactl's equivalent has
+        # been observed reporting a stale config; read /proc instead.
+        echo "cmdline:  $(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | cut -c1-160)"
+    else
+        echo "daemon:   not running"
+    fi
+    echo "--- hipfire ps ---"
+    hipfire ps 2>&1 | sed 's/^/  /' | head -10
+    echo "--- gpu ---"
+    for c in 0 1; do
+        local d=/sys/class/drm/card$c/device
+        printf '  card%s dev=%s  %6d / %6d MiB\n' "$c" "$(cat $d/device)" \
+            $(( $(cat $d/mem_info_vram_used)/1048576 )) $(( $(cat $d/mem_info_vram_total)/1048576 ))
+    done
+    if curl -sf -m 3 http://127.0.0.1:1234/health >/dev/null 2>&1; then
+        echo "  NOTE: llama-server is also up on :1234 and holding VRAM."
+    fi
+}
+
+cmd_logs()   { load_profile "" 2>/dev/null||true; tail -n "${1:-60}" "$HIPFIRE_LOG" 2>/dev/null || echo "no log at $HIPFIRE_LOG"; }
+cmd_bench()  { load_profile "" 2>/dev/null||true; hipfire bench "$HIPFIRE_MODEL" "$@"; }
+cmd_models() { load_profile "" 2>/dev/null||true; echo "--- local ---"; hipfire list 2>&1|head -20; echo "--- remote ---"; hipfire list --remote 2>&1|head -30; }
+cmd_doctor() {
+    load_profile "" 2>/dev/null||true
+    hipfire diag 2>&1 | sed 's/^/  /'
+    echo "--- kernel cache ---"
+    local k="$HOME/.hipfire/bin/kernels/compiled/$HIPFIRE_TARGET_ARCH"
+    [ -d "$k" ] && echo "  $k ($(ls "$k" 2>/dev/null|wc -l) objects)" || echo "  MISSING for $HIPFIRE_TARGET_ARCH -- run: hipfirectl setup"
+    echo "--- device bitcode ---"
+    [ -f "$HIPFIRE_DEVICE_LIB/ocml.bc" ] && echo "  ok: $HIPFIRE_DEVICE_LIB" \
+        || echo "  MISSING: $HIPFIRE_DEVICE_LIB -- every kernel compile will fail (see docs/NOTES.md)"
+}
+cmd_env()   { load_profile "" 2>/dev/null||true; env | grep -E "^(HIPFIRE|HIP_VISIBLE|ROCR_VISIBLE)" | sort; }
+cmd_exec()  { load_profile "" 2>/dev/null||true; hipfire "$@"; }
+cmd_setup() {
+    load_profile "" 2>/dev/null||true
+    echo "reinstalling/repairing runtime for $HIPFIRE_TARGET_ARCH ..."
+    hipfire setup --gpu-arch "$HIPFIRE_TARGET_ARCH" --yes 2>&1 | tail -20
+}
+
+case "${1:-status}" in
+    start)   shift; cmd_start "$@" ;;
+    stop)    shift; cmd_stop "$@" ;;
+    restart) shift; cmd_stop "$@"; sleep 2; cmd_start "$@" ;;
+    status)  shift; cmd_status "$@" ;;
+    logs)    shift; cmd_logs "$@" ;;
+    bench)   shift; cmd_bench "$@" ;;
+    models)  shift; cmd_models "$@" ;;
+    doctor)  shift; cmd_doctor "$@" ;;
+    setup)   shift; cmd_setup "$@" ;;
+    env)     shift; cmd_env "$@" ;;
+    exec)    shift; cmd_exec "$@" ;;
+    -h|--help|help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) die "unknown command: $1 (try: hipfirectl help)" ;;
+esac

@@ -12,7 +12,7 @@ Shared MCP servers installed once, used by all agent harnesses.
 | **GitHub** | `node_modules/.bin/mcp-server-github` | GitHub API tools | Repo/file/PR access via PAT |
 | **Context7** | `node_modules/.bin/context7-mcp` | context7 tools | Documentation lookup |
 | **Local LLM** | `node local-llm-mcp.js` | `local_llm_chat`, `local_llm_context`, `local_llm_status` | Read-only local-LLM delegation over llama.cpp |
-| **Codebase Memory** | `node_modules/.bin/codebase-memory-mcp` | `index_repository`, `search_graph`, `query_graph`, `trace_path`, `get_code_snippet`, `get_graph_schema`, `get_architecture`, `search_code` | Code knowledge graph — indexes repos into a persistent graph (SQLite in `~/.cache/codebase-memory-mcp/`) for structural queries, call-path tracing, and code search |
+| **Codebase Memory** | `node_modules/.bin/codebase-memory-mcp` | `index_repository`, `search_graph`, `query_graph`, `trace_path`, `get_code_snippet`, `get_graph_schema`, `get_architecture`, `search_code` | Code knowledge graph, indexes repos into a persistent graph (SQLite in `~/.cache/codebase-memory-mcp/`) for structural queries, call-path tracing, and code search |
 
 ## Local LLM MCP Server
 
@@ -23,11 +23,11 @@ the result with its own tools.
 
 ### Tools
 
-- **`local_llm_chat`** — One prompt plus optional system instructions. Best for
+- **`local_llm_chat`**, One prompt plus optional system instructions. Best for
   summaries, alternatives, log analysis, and second opinions.
-- **`local_llm_context`** — Continue a supplied multi-turn conversation. The
+- **`local_llm_context`**, Continue a supplied multi-turn conversation. The
   server does not retain state between calls.
-- **`local_llm_status`** — Confirm that the configured llama.cpp endpoint and
+- **`local_llm_status`**, Confirm that the configured llama.cpp endpoint and
   model are reachable without generating text.
 
 The response-token limit defaults to 2,048 and is capped at 4,096. Model
@@ -55,7 +55,7 @@ graph so agents can answer structural questions (callers/callees, paths between
 symbols, architecture) in one query instead of dozens of grep/read round-trips.
 Single static binary shipped via npm; fully local, no API keys.
 
-- **8 MCP tools, ~3k tokens of schemas total** — safe for local llama.cpp models
+- **8 MCP tools, ~3k tokens of schemas total**, safe for local llama.cpp models
   (unlike the 102-tool setups that overload grammar-constrained tool calling)
 - Graphs persist as one SQLite db per project in `~/.cache/codebase-memory-mcp/`
 - `auto_watch` is on by default: indexed projects re-sync on file changes
@@ -65,7 +65,7 @@ Single static binary shipped via npm; fully local, no API keys.
   node_modules/.bin/codebase-memory-mcp cli search_graph --project <project> --query "..."
   ```
 - Optional graph visualization UI: run with `--ui=true` (default port 9749)
-- Do NOT use its built-in `install` command — it auto-edits harness configs;
+- Do NOT use its built-in `install` command, it auto-edits harness configs;
   we manage MCP configs manually per harness below.
 
 MCP config (Qwen Code, Cline, Claude Code, or another MCP client):
