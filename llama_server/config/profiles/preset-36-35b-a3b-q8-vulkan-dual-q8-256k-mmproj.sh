@@ -1,3 +1,13 @@
+# ===== FACTS (generated: do not hand-edit) =====
+# MODEL    Qwen3.6-35B-A3B-Q8_0.gguf
+# BUILD    llama.cpp   backend Vulkan0,Vulkan1
+# SPLIT    layer 18,22   (XTX,R9700)   main-gpu 1   ubatch 1024
+# CONTEXT  262144   KV f16
+# SPEC     draft-mtp  n_max 2
+# VISION   yes (tower on Vulkan1)
+# VRAM     XTX ceiling 24200 MiB - see MEASURED below for this profile's peak
+# MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)
+# ===== END FACTS =====
 #!/usr/bin/env bash
 # Vulkan preset: Qwen3.6 35B-A3B Q8_0 (MoE), MTP, 256k context, BF16 vision.
 # Ships alongside the ROCm preset -- neither backend wins outright.

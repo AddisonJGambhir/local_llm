@@ -1,3 +1,13 @@
+# ===== FACTS (generated: do not hand-edit) =====
+# MODEL    Qwen3.8-27B-Q8_0.gguf
+# BUILD    llama.cpp-tp-adaptive   backend Vulkan0,Vulkan1
+# SPLIT    tensor 49,51   (XTX,R9700)   main-gpu 1   ubatch 1024
+# CONTEXT  262144   KV f16
+# SPEC     draft-mtp-adaptive  n_max 12  n_min_adaptive 3
+# VISION   yes (tower on Vulkan1)
+# VRAM     XTX ceiling 24200 MiB - see MEASURED below for this profile's peak
+# MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)
+# ===== END FACTS =====
 # ============================================================================
 # MERGED BUILD: Vulkan TENSOR SPLIT + ADAPTIVE MTP, 256k f16 -- 2026-08-22
 # ============================================================================

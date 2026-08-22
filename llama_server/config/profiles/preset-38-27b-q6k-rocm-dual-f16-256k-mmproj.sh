@@ -1,3 +1,13 @@
+# ===== FACTS (generated: do not hand-edit) =====
+# MODEL    Qwen3.8-27B-Q6_K.gguf
+# BUILD    llama.cpp   backend ROCm0,ROCm1
+# SPLIT    layer 38,27   (XTX,R9700)   main-gpu 1   ubatch 256
+# CONTEXT  245760   KV f16
+# SPEC     draft-mtp  n_max 3
+# VISION   yes (tower on ROCm1)
+# VRAM     XTX ceiling 24200 MiB - see MEASURED below for this profile's peak
+# MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)
+# ===== END FACTS =====
 #!/usr/bin/env bash
 # Qwen3.8 27B Q6_K (unsloth) with built-in MTP, f16 KV, native 256k context,
 # and the BF16 vision projector. ROCm, dual GPU.

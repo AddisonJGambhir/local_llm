@@ -1,3 +1,13 @@
+# ===== FACTS (generated: do not hand-edit) =====
+# MODEL    Qwen3.8-27B-Q6_K.gguf
+# BUILD    llama.cpp   backend ROCm0,ROCm1
+# SPLIT    tensor 1,1   (XTX,R9700)   main-gpu 1   ubatch 256
+# CONTEXT  245760   KV f16
+# SPEC     draft-mtp  n_max 3
+# VISION   yes (tower NOT routed - defaults to first device, the XTX)
+# VRAM     XTX ceiling 24200 MiB - see MEASURED below for this profile's peak
+# MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)
+# ===== END FACTS =====
 #!/usr/bin/env bash
 # Qwen3.8-27B Q6_K tensor-parallel decode profile, measured 2026-08-19.
 # This is an INTERACTIVE/DECODE alternative to the balanced layer profile. It

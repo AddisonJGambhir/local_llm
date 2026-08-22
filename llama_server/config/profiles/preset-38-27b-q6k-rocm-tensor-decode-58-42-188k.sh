@@ -1,3 +1,13 @@
+# ===== FACTS (generated: do not hand-edit) =====
+# MODEL    Qwen3.8-27B-Q6_K.gguf
+# BUILD    llama.cpp   backend ROCm0,ROCm1
+# SPLIT    tensor 58,42   (XTX,R9700)   main-gpu 1   ubatch 256
+# CONTEXT  192512   KV f16
+# SPEC     draft-mtp  n_max 3
+# VISION   yes (tower NOT routed - defaults to first device, the XTX)
+# VRAM     XTX ceiling 24200 MiB - see MEASURED below for this profile's peak
+# MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)
+# ===== END FACTS =====
 # ============================================================================
 # ROCm TENSOR, Q6_K -- FASTEST DECODE ON THIS BOX. MEASURED 2026-08-21
 # ============================================================================

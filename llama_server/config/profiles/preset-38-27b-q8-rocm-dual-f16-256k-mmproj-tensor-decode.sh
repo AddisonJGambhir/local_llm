@@ -1,3 +1,13 @@
+# ===== FACTS (generated: do not hand-edit) =====
+# MODEL    Qwen3.8-27B-Q8_0.gguf
+# BUILD    llama.cpp   backend ROCm0,ROCm1
+# SPLIT    tensor 45,55   (XTX,R9700)   main-gpu 1   ubatch 512
+# CONTEXT  245760   KV f16
+# SPEC     draft-mtp  n_max 3
+# VISION   yes (tower NOT routed - defaults to first device, the XTX)
+# VRAM     XTX ceiling 24200 MiB - see MEASURED below for this profile's peak
+# MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)
+# ===== END FACTS =====
 # ============================================================================
 # ts 50,50 WAS TRIED AND REVERTED, 2026-08-19 -- VRAM, not speed
 # ============================================================================

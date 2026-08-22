@@ -1,3 +1,13 @@
+# ===== FACTS (generated: do not hand-edit) =====
+# MODEL    Muse-Glimmer-30B-Q8_0.gguf
+# BUILD    llama.cpp   backend ROCm0,ROCm1
+# SPLIT    layer 1,1   (XTX,R9700)   main-gpu 1   ubatch 512
+# CONTEXT  262144   KV f16
+# SPEC     draft-dflash  n_max 2
+# VISION   no
+# VRAM     XTX ceiling 24200 MiB - see MEASURED below for this profile's peak
+# MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)
+# ===== END FACTS =====
 #!/usr/bin/env bash
 # Muse Glimmer 30B Q8_0 — ROCm dual-GPU, 256k via YaRN. 128k is the trained limit.
 #

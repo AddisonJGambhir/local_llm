@@ -1,3 +1,13 @@
+# ===== FACTS (generated: do not hand-edit) =====
+# MODEL    Qwen3.8-27B-Q6_K.gguf
+# BUILD    llama.cpp-vulkan-tp   backend Vulkan0,Vulkan1
+# SPLIT    tensor 68,32   (XTX,R9700)   main-gpu 1   ubatch 512
+# CONTEXT  147456   KV f16
+# SPEC     draft-mtp  n_max 3
+# VISION   yes (tower on Vulkan1)
+# VRAM     XTX ceiling 24200 MiB - see MEASURED below for this profile's peak
+# MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)
+# ===== END FACTS =====
 # ============================================================================
 # VULKAN TENSOR-PARALLEL, Q6_K -- FAST, FULL-PRECISION KV (f16). 2026-08-20
 # ============================================================================

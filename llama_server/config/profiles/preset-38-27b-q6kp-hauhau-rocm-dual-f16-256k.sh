@@ -1,3 +1,13 @@
+# ===== FACTS (generated: do not hand-edit) =====
+# MODEL    Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf
+# BUILD    llama.cpp   backend ROCm0,ROCm1
+# SPLIT    layer 34,31   (XTX,R9700)   main-gpu 1   ubatch 256
+# CONTEXT  245760   KV f16
+# SPEC     draft-mtp  n_max 3
+# VISION   no
+# VRAM     XTX ceiling 24200 MiB - see MEASURED below for this profile's peak
+# MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)
+# ===== END FACTS =====
 # ============================================================================
 # HauhauCS "Aggressive" Q6_K_P -- TUNED AND REJECTED AS DEFAULT, 2026-08-18
 # ============================================================================
