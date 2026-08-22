@@ -9,7 +9,8 @@
 # split was fastest; using the roomier R9700 as main GPU also moved scratch/output
 # memory off the nearly-full XTX.
 #
-# Retuned 2026-08-15 (see docs/QWEN38_DUAL_GPU_AUDIT.md). Every value below was
+# Retuned 2026-08-15 (audit doc never existed; see records/2026-08-16-dual-gpu/
+# and docs/HOW_TO_OPTIMIZE.md instead). Every value below was
 # re-measured against alternatives rather than assumed; only --batch-size moved.
 # Ranking used greedy decode: under sampled decode, moving a layer between GPUs
 # perturbs kernel numerics, the token stream diverges, and MTP acceptance swings
@@ -67,7 +68,7 @@ LLAMA_BINARY="$LLM_ROOT/llama.cpp/build/bin/llama-server"
 LLAMA_MODEL="$LLAMA_SERVER_ROOT/models/Qwen3.8-27B-Q8_0.gguf"
 LLAMA_BACKEND="rocm"
 LLAMA_DEVICE="ROCm0,ROCm1"
-LLAMA_CONTEXT=262144
+LLAMA_CONTEXT=245760
 # 512 -> 256 on 2026-08-16, together with ts 1,1. See the DEPTH RETUNE block
 # below: ubatch was originally chosen at ~6k prompts, and the ranking inverts
 # once there is a real KV cache to attend over.
@@ -125,17 +126,17 @@ LLAMA_CACHE_RAM=24576
 # +0.9% / -2.4% / +1.7%. A wash, so this replaces the profile rather than
 # shipping as a second preset.
 #
-# END-TO-END VALIDATION, this exact config with MTP and c=262144:
+# HISTORIC END-TO-END VALIDATION with MTP and c=262144:
 #     130,001-token prefill  484.6 t/s
 #     decode                  29.21 t/s   (draft acceptance 70.5%)
 #     PEAK XTX UNDER LOAD    24,150 MiB
 #
-# *** MEMORY: 150 MiB OF MARGIN. READ THIS BEFORE CHANGING ANYTHING. ***
-# The ceiling on this host is 24,300 MiB (the XTX drives the desktop; past it
+# *** HISTORIC c=262144 MEMORY: 50 MiB OF MARGIN; NO LONGER SHIPPED. ***
+# The ceiling on this host is 24,200 MiB (the XTX drives the desktop; past it
 # the compositor is evicted to GTT and the screen drops to ~3 fps).
 #   c=262144 at ts 1,1 allocates 23,927 MiB at load and peaks 24,150 UNDER LOAD.
 #   The +223 MiB delta is compute buffers plus the MTP draft context. A
-#   load-time-only VRAM check would call this safe when it is 150 MiB away.
+#   load-time-only VRAM check would call this safe when it is 50 MiB away.
 # Measured context ladder at ts 1,1 + f16 + ub 256 (load-time peak):
 #     196608 -> 21,754     229376 -> 22,845
 #     245760 -> 23,389     262144 -> 23,927
@@ -143,6 +144,13 @@ LLAMA_CACHE_RAM=24576
 # If the desktop footprint grows (it has moved 1.7 -> 3.0 GiB in one session
 # before), DROP TO 245760 -- that buys 544 MiB back. Moving the display to the
 # motherboard iGPU frees ~1,970 MiB and makes this comfortable instead of tight.
+#
+# SAFETY CORRECTION 2026-08-19: the hard ceiling is 24,200, not 24,300. With
+# the current desktop footprint, a fresh live layer server at c=260096 rose from
+# 24,008 to 24,197 MiB on its second request and the exact-PID watcher stopped
+# it. c=245760 was then validated over 8 x 400-token MTP samples: peak 23,225
+# MiB. The balanced profile now ships c=245760. The c=262144 figures above are
+# retained as historical evidence only and must not be treated as safe today.
 #
 # CAVEATS, stated plainly:
 #   - The 24,150 figure was measured TEXT-ONLY, without --mmproj. The vision
@@ -198,7 +206,7 @@ LLAMA_MIN_P=0.0
 LLAMA_PRESENCE_PENALTY=0.0
 LLAMA_REPEAT_PENALTY=1.0
 LLAMA_REASONING="on"
-LLAMA_CHAT_TEMPLATE_KWARGS='{"preserve_thinking":true}'
+LLAMA_CHAT_TEMPLATE_KWARGS='{"preserve_thinking":true,"reasoning_effort":"xhigh"}'
 
 LLAMA_STARTUP_TIMEOUT=420
 
@@ -222,7 +230,6 @@ LLAMA_EXTRA_ARGS=(
     --ctx-checkpoints 8
     --device ROCm0,ROCm1
     --split-mode layer
-    --cache-reuse 256
     --tensor-split 1,1
     --main-gpu 1
     --batch-size 6144

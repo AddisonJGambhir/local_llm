@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# llama-reasoning — show or change the Qwen3.8 reasoning effort level.
+#
+#   llama-reasoning                 show the current level
+#   llama-reasoning medium          set it, then restart the server to apply
+#   llama-reasoning low --no-restart    set it, apply on next restart
+#
+# Levels (from the Qwen3.8 chat template, which accepts ONLY these):
+#   xhigh   default. Injects "think carefully, validate key assumptions,
+#           consider plausible alternatives..." — longest, slowest answers.
+#   medium  injects NOTHING. The model's natural behavior, no steering.
+#   low     injects "keep your thinking brief... move directly to the
+#           conclusion" — shortest.
+# ("high" is silently remapped to xhigh by the template, so it is not offered.)
+#
+# No-restart alternative: any single request can override this, and request
+# kwargs MERGE with the server's rather than replacing them:
+#   {"chat_template_kwargs": {"reasoning_effort": "xhigh"}}
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROFILES="$ROOT/config/profiles"
+STATE="${LLAMA_STATE_HOME:-${XDG_STATE_HOME:-$HOME/.local/state}/local-llm}"
+GEN="$STATE/interactive-profile.sh"
+
+# Only the Qwen3.8 27B presets use this template. The MoE and Muse Glimmer
+# templates do not define reasoning_effort, and Qwen3.8's template calls
+# raise_exception() on a value it does not recognize, so do not spray this
+# across every profile.
+TARGETS=(
+    preset-38-27b-q6k-rocm-dual-f16-256k-mmproj.sh
+    preset-38-27b-q6kp-hauhau-rocm-dual-f16-256k.sh
+    preset-38-27b-q8-rocm-dual-q8-256k-mmproj.sh
+    preset-38-27b-q8-vulkan-dual-q8-256k-mmproj.sh
+)
+
+current_level() {
+    local f="$PROFILES/${TARGETS[0]}" lvl
+    lvl=$(grep -m1 -oE '"reasoning_effort":"[a-z]+"' "$f" 2>/dev/null | cut -d'"' -f4)
+    printf '%s\n' "${lvl:-xhigh (template default, not set explicitly)}"
+}
+
+active_preset() {
+    [ -r "$GEN" ] || return 0
+    grep -m1 -oE 'profiles/[^ ]+\.sh' "$GEN" 2>/dev/null | sed 's|profiles/||'
+}
+
+LEVEL=""; RESTART=1
+for arg in "$@"; do
+    case "$arg" in
+        -n|--no-restart) RESTART=0 ;;
+        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        xhigh|medium|low) LEVEL="$arg" ;;
+        high)
+            echo "llama-reasoning: 'high' is remapped to 'xhigh' by the template; use xhigh." >&2
+            exit 2 ;;
+        *) echo "llama-reasoning: unknown argument '$arg' (want xhigh|medium|low)" >&2; exit 2 ;;
+    esac
+done
+
+if [ -z "$LEVEL" ]; then
+    echo "reasoning effort: $(current_level)"
+    ap="$(active_preset)"
+    [ -n "$ap" ] && echo "active profile:   $ap"
+    if [ -n "$ap" ] && [[ ! " ${TARGETS[*]} " == *" $ap "* ]]; then
+        echo "note: the active profile is not a Qwen3.8 27B preset, so this setting does not apply to it."
+    fi
+    echo
+    echo "set with: llama-reasoning <xhigh|medium|low> [--no-restart]"
+    exit 0
+fi
+
+OLD="$(current_level)"
+for f in "${TARGETS[@]}"; do
+    p="$PROFILES/$f"
+    [ -f "$p" ] || { echo "llama-reasoning: missing $f, skipped" >&2; continue; }
+    sed -i "s|^LLAMA_CHAT_TEMPLATE_KWARGS=.*|LLAMA_CHAT_TEMPLATE_KWARGS='{\"preserve_thinking\":true,\"reasoning_effort\":\"$LEVEL\"}'|" "$p"
+    bash -n "$p" || { echo "llama-reasoning: $f failed syntax check after edit" >&2; exit 1; }
+done
+echo "reasoning effort: $OLD -> $LEVEL  (${#TARGETS[@]} Qwen3.8 profiles updated)"
+
+ap="$(active_preset)"
+if [ -n "$ap" ] && [[ ! " ${TARGETS[*]} " == *" $ap "* ]]; then
+    echo "note: active profile '$ap' is not a Qwen3.8 preset; nothing to restart for."
+    exit 0
+fi
+
+if [ "$RESTART" -eq 1 ]; then
+    if pgrep -x llama-server >/dev/null; then
+        echo "restarting server to apply (drops the prompt cache)..."
+        "$SCRIPT_DIR/llamactl" restart
+    else
+        echo "server not running; the new level applies on next start."
+    fi
+else
+    echo "not restarting; the new level applies on next start."
+fi

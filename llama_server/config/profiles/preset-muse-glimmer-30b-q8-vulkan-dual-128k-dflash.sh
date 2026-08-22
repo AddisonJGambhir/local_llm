@@ -57,6 +57,5 @@ LLAMA_EXTRA_ARGS=(
     --main-gpu 1
     --batch-size 2048
     --ctx-checkpoints 8
-    --cache-reuse 256
     --no-mmap
 )

@@ -49,7 +49,7 @@ MODELS = [
         "Qwen3.6-35B-A3B-Q8_0",
         matrix.MODEL_35B_MTP_Q8,
     ),  # MoE+MTP, Q8_0 — current primary
-    ("Qwen3.6-27B-MTP-Q4_K_M", matrix.MODEL_27B_MTP),  # dense+MTP, Q4_K_M
+    # REMOVED 2026-08-22 (model deleted): ("Qwen3.6-27B-MTP-Q4_K_M", matrix.MODEL_27B_MTP),  # dense+MTP, Q4_K_M
 ]
 DEFAULT_N_MAX = [2, 3, 4, 5, 6]
 

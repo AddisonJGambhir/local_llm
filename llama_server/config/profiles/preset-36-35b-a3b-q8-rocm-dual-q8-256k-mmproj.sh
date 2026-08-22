@@ -37,7 +37,9 @@
 #   -ctk/-ctv f16         faster than q8_0 despite reading 2x the bytes: no
 #                         dequant on the decode path. 83.21 vs 80.77 t/s. Only
 #                         affordable at ts 18,22 -- see the constraint above.
-#   --cache-reuse 256     +3% prefill (2623 -> 2702). 0/128/256/512 tested.
+#   (cache-reuse removed)  logged as "+3% prefill" (2623 -> 2702) but the flag is
+#                         disabled at load on hybrid memory (server-context.cpp
+#                         forces n_cache_reuse=0); the delta was something else.
 #   n-max 2               1=69.96, 2=81.60, 3=76.93, 4=71.88 t/s. Same answer on
 #                         Vulkan. Do NOT copy n-max from the Qwen3.8 profile,
 #                         which wants 3 -- its dense decode step is expensive
@@ -132,7 +134,6 @@ LLAMA_EXTRA_ARGS=(
     --tensor-split 16,24
     --main-gpu 1
     --batch-size 12288
-    --cache-reuse 256
     # Each cached prompt state carries --ctx-checkpoints copies of the recurrent
     # state (default 32). Cutting to 8 shrinks every entry substantially so more
     # contexts fit the budget, at the cost of coarser rewind granularity on

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Launch the official DeepSeek Harness against the managed local llama.cpp API.
+set -euo pipefail
+
+DSH_ROOT=/home/addison-gambhir/Desktop/deepseek-harness
+export DSH_HOME="${DSH_HOME:-/home/addison-gambhir/.dsh-local}"
+export DSH_LOCAL_LLM_API_KEY="${DSH_LOCAL_LLM_API_KEY:-local}"
+export DSH_TELEMETRY_DISABLED="${DSH_TELEMETRY_DISABLED:-1}"
+
+# Reuse the existing Qwen Code MCP credential without storing a second copy.
+if [[ -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]] \
+    && command -v jq >/dev/null \
+    && [[ -r /home/addison-gambhir/.qwen/settings.json ]]; then
+    github_token="$(jq -r '.mcpServers.github.env.GITHUB_PERSONAL_ACCESS_TOKEN // empty' /home/addison-gambhir/.qwen/settings.json)"
+    if [[ -n "$github_token" ]]; then
+        export GITHUB_PERSONAL_ACCESS_TOKEN="$github_token"
+    fi
+fi
+
+if [[ "${1:-}" == "--headless" ]]; then
+    shift
+    exec "$DSH_ROOT/apps/cli/lib/bin.js" --profile headless "$@"
+fi
+
+exec "$DSH_ROOT/apps/cli/lib/bin.js" web "$@"

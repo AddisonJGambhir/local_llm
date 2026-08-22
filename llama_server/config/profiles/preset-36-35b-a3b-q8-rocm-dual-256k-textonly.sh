@@ -106,7 +106,6 @@ LLAMA_EXTRA_ARGS=(
     --tensor-split 16,24
     --main-gpu 1
     --batch-size 12288
-    --cache-reuse 256
     --no-mmap
     --reasoning-preserve
 )

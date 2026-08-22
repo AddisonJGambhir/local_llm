@@ -1,0 +1,47 @@
+## PHASE 1: split sweep (llama-bench, ub 1024, r=2, unspeculated)
+### ts 50/50
+        899.25 ± 4.27 
+         22.48 ± 0.04 
+### ts 60/40
+        829.06 ± 0.63 
+         25.00 ± 0.04 
+### ts 65/35
+        792.84 ± 1.37 
+         27.06 ± 0.10 
+### ts 70/30
+        742.99 ± 0.31 
+         28.15 ± 0.02 
+### ts 75/25
+        713.42 ± 0.17 
+         27.49 ± 0.05 
+## PHASE 2: ubatch at the decode split (70/30) and the pp split (50/50)
+### ts 70/30 ub 512
+        721.25 ± 0.00 
+         28.27 ± 0.05 
+### ts 70/30 ub 2048
+        778.32 ± 0.10 
+         28.12 ± 0.05 
+### ts 50/50 ub 512
+        851.60 ± 0.57 
+         22.62 ± 0.01 
+### ts 50/50 ub 2048
+        935.99 ± 0.35 
+         22.43 ± 0.04 
+## PHASE 3: context ceilings (live server, server-only VRAM, real generation)
+q6kp-70,30-65536-f16	ts=70,30	ctx=65536	ub=512	n=3	pp=582.65	tg=53.78	ppN=3242	tgN=512	peakXTX=22113	peakR97=9434	idleXTX=21985	idleR97=9345	desktopBASE=1907	SERVERONLY=20206
+  acceptance: draft acceptance = 0.59854 mean acceptance length =  2.79 acceptance rate per position = (0.787, 0.585, 0.421) 
+q6kp-70,30-98304-f16	ts=70,30	ctx=98304	ub=512	n=3	pp=587.82	tg=54.30	ppN=3242	tgN=512	peakXTX=23471	peakR97=10280	idleXTX=23342	idleR97=10191	desktopBASE=1907	SERVERONLY=21564
+  acceptance: draft acceptance = 0.60478 mean acceptance length =  2.81 acceptance rate per position = (0.797, 0.571, 0.440) 
+q6kp-70,30-131072-q8_0	ts=70,30	ctx=131072	ub=512	n=3	pp=582.56	tg=50.79	ppN=3242	tgN=512	peakXTX=22450	peakR97=9707	idleXTX=22321	idleR97=9617	desktopBASE=1907	SERVERONLY=20543
+  acceptance: draft acceptance = 0.54922 mean acceptance length =  2.65 acceptance rate per position = (0.772, 0.528, 0.347) 
+q6kp-70,30-163840-q8_0	ts=70,30	ctx=163840	ub=512	n=3	pp=589.23	tg=48.29	ppN=3242	tgN=512	peakXTX=23228	peakR97=10213	idleXTX=23099	idleR97=10123	desktopBASE=1907	SERVERONLY=21321
+  acceptance: draft acceptance = 0.51074 mean acceptance length =  2.53 acceptance rate per position = (0.723, 0.465, 0.342) 
+q6kp-50,50-131072-f16	ts=50,50	ctx=131072	ub=1024	n=3	pp=661.52	tg=40.85	ppN=3242	tgN=512	peakXTX=19449	peakR97=17498	idleXTX=19290	idleR97=17380	desktopBASE=1907	SERVERONLY=17542
+  acceptance: draft acceptance = 0.52694 mean acceptance length =  2.58 acceptance rate per position = (0.722, 0.500, 0.359) 
+q6kp-50,50-163840-f16	ts=50,50	ctx=163840	ub=1024	n=3	pp=660.51	tg=40.07	ppN=3242	tgN=512	peakXTX=20635	peakR97=18684	idleXTX=20476	idleR97=18566	desktopBASE=1907	SERVERONLY=18728
+  acceptance: draft acceptance = 0.51159 mean acceptance length =  2.53 acceptance rate per position = (0.718, 0.495, 0.317) 
+q6kp-50,50-196608-q8_0	ts=50,50	ctx=196608	ub=1024	n=3	pp=604.04	tg=40.26	ppN=3242	tgN=512	peakXTX=18942	peakR97=17050	idleXTX=18783	idleR97=16872	desktopBASE=1907	SERVERONLY=17035
+  acceptance: draft acceptance = 0.53051 mean acceptance length =  2.59 acceptance rate per position = (0.716, 0.543, 0.330) 
+q6kp-50,50-262144-q8_0	ts=50,50	ctx=262144	ub=1024	n=3	pp=607.90	tg=40.51	ppN=3242	tgN=512	peakXTX=20405	peakR97=18452	idleXTX=20196	idleR97=18284	desktopBASE=1907	SERVERONLY=18498
+  acceptance: draft acceptance = 0.53130 mean acceptance length =  2.59 acceptance rate per position = (0.741, 0.513, 0.340) 
+Q6KP-TUNING-DONE Fri Aug 21 02:38:41 AM EDT 2026

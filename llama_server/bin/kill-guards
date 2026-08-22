@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Kill guard processes by reading /proc directly, skipping self and parent.
+PAT="llama_server/bin/xtx-guard"
+me=$$; par=$PPID; n=0
+for d in /proc/[0-9]*; do
+  pid=${d#/proc/}
+  [ "$pid" = "$me" ] && continue
+  [ "$pid" = "$par" ] && continue
+  cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+  case "$cmd" in
+    *"$PAT"*) kill -9 "$pid" 2>/dev/null && { echo "killed $pid"; n=$((n+1)); } ;;
+  esac
+done
+echo "total killed: $n"

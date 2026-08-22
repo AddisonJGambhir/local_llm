@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# hermes-sync-ctx — point Hermes at the context window llama-server is ACTUALLY serving.
+#
+# Hermes has no auto-detection for custom/OpenAI-compatible providers: it reads
+# model.context_length straight out of ~/.hermes/config.yaml. That value is static,
+# so switching llama-server presets (128k / 144k / 192k / 256k) silently leaves
+# Hermes compacting against the wrong window.
+#
+# Compaction fires at:   threshold x (context_length - max_tokens)
+# With threshold 0.99 and max_tokens 8192 that lands ~10k below the window at every
+# preset size, which is the intent. This script keeps the context_length half honest.
+#
+# Usage:  hermes-sync-ctx            # read the live server, update the config
+#         hermes-sync-ctx --check    # report only, change nothing
+set -uo pipefail
+CFG="${HERMES_CONFIG:-$HOME/.hermes/config.yaml}"
+PORT="${LLAMA_PORT:-1234}"
+CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
+
+command -v python3 >/dev/null || { echo "hermes-sync-ctx: python3 required" >&2; exit 1; }
+[ -r "$CFG" ] || { echo "hermes-sync-ctx: cannot read $CFG" >&2; exit 1; }
+
+PROPS=$(curl -s -m 5 "http://127.0.0.1:$PORT/props" 2>/dev/null) || true
+if [ -z "$PROPS" ]; then
+    echo "hermes-sync-ctx: no llama-server on port $PORT — start it first, config untouched" >&2
+    exit 1
+fi
+
+python3 - "$CFG" "$PROPS" "$CHECK" <<'PY'
+import json, re, sys, shutil, datetime
+
+cfg_path, props_raw, check = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+try:
+    props = json.loads(props_raw)
+except Exception as e:
+    sys.exit(f"hermes-sync-ctx: /props was not JSON ({e})")
+
+n_ctx = (props.get("default_generation_settings") or {}).get("n_ctx")
+if not isinstance(n_ctx, int) or n_ctx <= 0:
+    sys.exit("hermes-sync-ctx: /props did not report a usable n_ctx")
+
+src = open(cfg_path).read()
+
+# Edit ONLY the context_length line inside the top-level `model:` block. A YAML
+# round-trip would work but would also strip this file's comments.
+m = re.search(r"(?ms)^model:\n(?:[ \t]+.*\n?)*", src)
+if not m:
+    sys.exit("hermes-sync-ctx: no top-level `model:` block in the config")
+block = m.group(0)
+
+cur = re.search(r"^([ \t]+)context_length:[ \t]*(\d+)[ \t]*$", block, re.M)
+if not cur:
+    sys.exit("hermes-sync-ctx: model block has no `context_length:` line to update")
+old_ctx = int(cur.group(2))
+
+mt = re.search(r"^[ \t]+max_tokens:[ \t]*(\d+)[ \t]*$", block, re.M)
+max_tokens = int(mt.group(1)) if mt else 0
+th = re.search(r"(?ms)^compression:\n(?:[ \t]+.*\n?)*", src)
+thv = re.search(r"^[ \t]+threshold:[ \t]*([0-9.]+)[ \t]*$", th.group(0), re.M) if th else None
+threshold = float(thv.group(1)) if thv else 0.50
+
+def trigger(C, mt, pct):
+    # Mirrors agent/context_compressor._compute_threshold_tokens for the common case.
+    if C and C < 512_000:
+        pct = max(pct, 0.75)          # small-context floor, raise-only
+    eff = C - (mt or 0)
+    if eff <= 0:
+        eff = C
+    return max(int(eff * pct), 64_000)
+
+t_old, t_new = trigger(old_ctx, max_tokens, threshold), trigger(n_ctx, max_tokens, threshold)
+print(f"llama-server n_ctx      : {n_ctx:,}")
+print(f"config context_length   : {old_ctx:,}" + ("  (already correct)" if old_ctx == n_ctx else f"  ->  {n_ctx:,}"))
+print(f"max_tokens / threshold  : {max_tokens:,} / {threshold}")
+print(f"compaction trigger      : {t_old:,}" + ("" if old_ctx == n_ctx else f"  ->  {t_new:,}"))
+print(f"headroom below window   : {n_ctx - t_new:,} tokens")
+
+if old_ctx == n_ctx:
+    print("nothing to do.")
+    sys.exit(0)
+if check:
+    print("--check: config NOT modified.")
+    sys.exit(0)
+
+stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+shutil.copy2(cfg_path, f"{cfg_path}.bak-syncctx-{stamp}")
+new_block = re.sub(r"^([ \t]+)context_length:[ \t]*\d+[ \t]*$",
+                   lambda mm: f"{mm.group(1)}context_length: {n_ctx}", block, count=1, flags=re.M)
+open(cfg_path, "w").write(src[:m.start()] + new_block + src[m.end():])
+print(f"updated {cfg_path}  (backup: {cfg_path}.bak-syncctx-{stamp})")
+print("restart Hermes for it to take effect.")
+PY

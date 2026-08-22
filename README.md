@@ -48,7 +48,7 @@ Full operational detail: [`llama_server/README.md`](llama_server/README.md).
 
 ## Presets (shipped configurations)
 
-All profiles in `llama_server/config/profiles/` (18 total: `default.sh` + 17 presets).
+All profiles in `llama_server/config/profiles/` (17 total: `default.sh` + 16 presets).
 Start one with `llamactl restart --profile config/profiles/<file>`.
 Pre t/s = prompt processing · Dec t/s = decode · Acc = draft acceptance.
 ¹ measured on the 2026-05 harness (pre-f16-KV era), re-measure before trusting.
@@ -81,16 +81,11 @@ xtx-only preset is for when the R9700 is needed elsewhere (batch 2048).
 | `preset-muse-glimmer-30b-q8-rocm-dual-128k-dflash` | Muse Glimmer 30B | ROCm | f16 | DFlash n2 | 128k | 986 | 33.2 | 58.5% | 18.2 / 16.5 |
 | `preset-muse-glimmer-30b-q8-rocm-dual-256k-yarn` | Muse Glimmer 30B | ROCm | f16 | DFlash n2 | 256k | 891 | 34.1 | N/A | 19.9 / 18.3 |
 | `preset-muse-glimmer-30b-q8-vulkan-dual-128k-dflash` | Muse Glimmer 30B | Vulkan | f16 | DFlash n2 | 128k | 743 | 31.7 | 43.2% | 18.2 / 16.5 |
-| `preset-nemotron35-30b-a3b-q8-rocm-dual-256k` | **Nemotron 3.5 30B-A3B** | ROCm | f16 | off ² | 256k | 3034 | 94.6 | n/a | 19.9 / 18.6 |
-| `preset-nemotron35-30b-a3b-q8-rocm-dual-1m` | **Nemotron 3.5 30B-A3B** | ROCm | f16 | off ² | **1M** | 2555 | 94.7 | n/a | 19.9 / 29.4 |
 
-² Nemotron's built-in MTP hangs ~37% of generations (upstream bug, independent of
-KV/context/seed), speculation ships **off**; it's still ~2× the dense models.
-
-**Shape of the table:** the two ~3B-active MoEs (35B-A3B, Nemotron 3.5) read far
-fewer bytes per token than the dense 27/30B models, so they sit at 94–95 t/s while
-everything dense sits at 32–39 t/s. Nemotron adds 1M context at no decode cost;
-the 35B MoE adds vision and working speculation. The `mmproj` profiles pin the
+**Shape of the table:** the ~3B-active MoE (35B-A3B) reads far fewer bytes per
+token than the dense 27/30B models, so it sits at ~94 t/s while everything dense
+sits at 32–39 t/s. It also adds vision and working speculation. The `mmproj`
+profiles pin the
 vision tower to the R9700 (`MTMD_BACKEND_DEVICE`) to keep it off the constrained XTX;
 their text stats are the text-only siblings'. `ppopt` is the pre-f16 q8_0
 text-only/prefill variant, kept for maximum prefill when vision isn't needed.
@@ -100,7 +95,6 @@ text-only/prefill variant, kept for maximum prefill when vision isn't needed.
 | GGUF (`llama_server/models/`) | Size | Type | Role |
 | --- | ---: | --- | --- |
 | `Qwen3.6-35B-A3B-Q8_0` | 36 GB | MoE (3B active) + MTP | **Dual-GPU primary**, vision, working speculation |
-| `NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q8_0` | 33 GB | Mamba-2/attention MoE | **Dual-GPU, 1M context**, speculation off (upstream hang) |
 | `Qwen3.8-27B-Q8_0` | 28 GB | Dense + MTP + vision | Dual-GPU, f16 KV, ts 28,37 |
 | `Muse-Glimmer-30B-Q8_0` | 28 GB | Dense + DFlash sidecar | Dual-GPU, YaRN 256k variant |
 | `Qwen3.6-27B-MTP-Q4_K_M` | 16 GB | Dense + MTP | Single-GPU |
@@ -138,10 +132,10 @@ All require the GPU free (`llamakill` first) and stream CSV + per-run logs to
 
 Deep operational reference: [`llama_server/README.md`](llama_server/README.md).
 Findings and history in [`llama_server/docs/`](llama_server/docs/):
-[2026-08-16 results](llama_server/docs/RESULTS_2026-08-16.md) ·
-[2026-08-16 optimizations audit](llama_server/docs/AUDIT_2026-08-16_OPTIMIZATIONS.md) ·
-[speculation backend audit](llama_server/docs/QWEN36_SPECULATION_BACKEND_AUDIT.md) ·
-[live tuning queue](llama_server/docs/TUNING_QUEUE.md) ·
+[2026-08-16 results](llama_server/records/2026-08-16-dual-gpu/RESULTS_2026-08-16.md) ·
+[2026-08-16 optimizations audit](llama_server/records/2026-08-16-dual-gpu/AUDIT_2026-08-16_OPTIMIZATIONS.md) ·
+[speculation backend audit](llama_server/archive/model-audits/QWEN36_SPECULATION_BACKEND_AUDIT.md) ·
+[live tuning queue](llama_server/docs/active/TUNING_QUEUE.md) ·
 [setup guide](llama_server/docs/SETUP.md).
 
 ## Layout

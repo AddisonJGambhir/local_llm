@@ -31,3 +31,6 @@ integrations/pi-emote/
 
 # machine-specific compiled kernel caches (rebuildable via hipfire install)
 **/.hipfire_kernels/
+
+# playwright-mcp scrape cruft (page dumps, console logs)
+.playwright-mcp/

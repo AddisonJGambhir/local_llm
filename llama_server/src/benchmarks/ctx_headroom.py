@@ -32,7 +32,7 @@ import matrix  # noqa: E402
 MODELS = [
     ("Qwen3.6-35B-A3B-MTP-UD-IQ4_NL", matrix.MODEL_35B_MTP_IQ4),
     ("Qwen3.6-35B-A3B-UD-Q4_K_M", matrix.MODEL_35B_MTP_Q4KM),
-    ("Qwen3.6-27B-MTP-Q4_K_M", matrix.MODEL_27B_MTP),
+    # REMOVED 2026-08-22 (model deleted): ("Qwen3.6-27B-MTP-Q4_K_M", matrix.MODEL_27B_MTP),
 ]
 
 DEFAULT_MIN_CTX_K = 16  # lower bound, assumed to fit

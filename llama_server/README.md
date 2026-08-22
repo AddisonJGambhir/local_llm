@@ -13,7 +13,6 @@ dual-GPU AMD workstation:
 | Model | Size | Arch | Specs | Dec t/s | Pre t/s | GPU |
 | --- | ---: | --- | --- | ---: | ---: | --- |
 | **Qwen3.6 35B-A3B** Q8_0 | 36 GB | MoE (3B active) | MTP n_max=2, f16 KV, dual-GPU | 93.7 vk / **94.4** rocm | **2072** / **3128** | dual |
-| **Nemotron 3.5 Lightning** 30B-A3B Q8_0 | 33 GB | Mamba-2/attention MoE | spec off (upstream MTP hang), f16 KV | 94.6 (256k) / 94.7 (1M) | 3034 (256k) / 2555 (1M) | dual (ROCm) |
 | **Qwen3.8 27B** Q8_0 | 28 GB | Dense + vision | MTP n_max=3, f16 KV, dual-GPU | 35.0 vk / **38.5** rocm | 825 / **982** | dual |
 | **Muse Glimmer 30B** Q8_0 | 28 GB | Dense | DFlash n_max=2, f16 KV, dual-GPU | 31.7 vk / **33.2** rocm | 743 / **986** | dual |
 | Qwen3.6 27B-MTP Q4_K_M | 16 GB | Dense | MTP, q8_0 KV, single-GPU | ~73–76 (May harness) | N/A | single |
@@ -21,7 +20,6 @@ dual-GPU AMD workstation:
 **Profile selection is workload-driven (2026-08-16 numbers):**
 
 - Long generation (chat, agentic, reasoning): **35B MoE ROCm dual** (94.4 t/s, 3128 prefill).
-- 1M context: **Nemotron 3.5** at 2555 prefill, 94.7 decode (speculation off; upstream MTP hang).
 - Vision + coding: **35B MoE ROCm dual with `--mmproj`** (vision tower pinned to the R9700).
 - Text-only, maximum prefill: **Qwen3.8 27B ROCm `ppopt`** (q8_0 KV, ts 1,1).
 - Dense quality, single GPU: **27B MTP Q4_K_M** 128k presets.
@@ -149,23 +147,19 @@ Large batch `6144–12288` (ROCm only; no-op on Vulkan).
 | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | --- |
 | `preset-36-35b-a3b-q8-rocm-dual-256k-textonly` | 35B MoE Q8_0 | ROCm | f16 | 256k | MTP | 2 | **3128** | **94.4** | 80.9% | 21.0 / 30.2 |
 | `preset-36-35b-a3b-q8-rocm-dual-q8-256k-mmproj` | 35B MoE Q8_0 + vision | ROCm | f16 | 256k | MTP | 2 | 3128 | 94.4 | 80.9% | 21.0 / 30.2 |
-| `preset-36-35b-a3b-q8-vulkan-dual-256k-textonly` | 35B MoE Q8_0 | Vulkan | f16 | 256k | MTP | 2 | 2072 | 93.7 | N/A |, |
-| `preset-36-35b-a3b-q8-vulkan-dual-q8-256k-mmproj` | 35B MoE Q8_0 + vision | Vulkan | f16 | 256k | MTP | 2 | 2072 | 93.7 | N/A |, |
+| `preset-36-35b-a3b-q8-vulkan-dual-256k-textonly` | 35B MoE Q8_0 | Vulkan | f16 | 256k | MTP | 2 | 2072 | 93.7 | N/A | , |
+| `preset-36-35b-a3b-q8-vulkan-dual-q8-256k-mmproj` | 35B MoE Q8_0 + vision | Vulkan | f16 | 256k | MTP | 2 | 2072 | 93.7 | N/A | , |
 | `preset-36-27b-q4km-rocm-dual-256k` | 27B MTP Q4_K_M | ROCm | f16 | 256k | MTP | 2 | 1408 | 36.9 | 69.8% | 19.7 / 20.9 |
-| `preset-36-27b-q4km-vulkan-dual-256k` | 27B MTP Q4_K_M | Vulkan | f16 | 256k | MTP | 2 | N/A |, | N/A |, |
+| `preset-36-27b-q4km-vulkan-dual-256k` | 27B MTP Q4_K_M | Vulkan | f16 | 256k | MTP | 2 | N/A | , | N/A | , |
 | `preset-38-27b-q8-rocm-dual-q8-256k-mmproj` | Qwen3.8 27B + vision | ROCm | f16 | 256k | MTP | 3 | 982 | 38.5 | 42–72% | 22.5 / 29.7 |
-| `preset-38-27b-q8-rocm-dual-256k-ppopt` | Qwen3.8 27B + vision | ROCm | q8_0 | 256k | MTP | 3 | N/A |, | N/A |, |
+| `preset-38-27b-q8-rocm-dual-256k-ppopt` | Qwen3.8 27B + vision | ROCm | q8_0 | 256k | MTP | 3 | N/A | , | N/A | , |
 | `preset-38-27b-q8-vulkan-dual-q8-256k-mmproj` | Qwen3.8 27B + vision | Vulkan | f16 | 256k | MTP | 3 | 825 | 35.0 | 53.8% | 22.2 / 29.4 |
 | `preset-muse-glimmer-30b-q8-rocm-dual-128k-dflash` | Muse Glimmer 30B | ROCm | f16 | 128k | DFlash | 2 | 986 | 33.2 | 58.5% | 18.2 / 16.5 |
 | `preset-muse-glimmer-30b-q8-rocm-dual-256k-yarn` | Muse Glimmer 30B | ROCm | f16 | 256k | DFlash | 2 | 891 | 34.1 | 3/3 @149k | 19.9 / 18.3 |
 | `preset-muse-glimmer-30b-q8-vulkan-dual-128k-dflash` | Muse Glimmer 30B | Vulkan | f16 | 128k | DFlash | 2 | 743 | 31.7 | 43.2% | 18.2 / 16.5 |
-| `preset-nemotron35-30b-a3b-q8-rocm-dual-256k` | Nemotron 3.5 30B | ROCm | f16 | 256k | off² | N/A | 3034 | 94.6 | n/a | 19.9 / 18.6 |
-| `preset-nemotron35-30b-a3b-q8-rocm-dual-1m` | Nemotron 3.5 30B | ROCm | f16 | **1M** | off² | N/A | 2555 | 94.7 | n/a | 19.9 / 29.4 |
-
-² Nemotron's built-in MTP hangs ~37% of generations (upstream bug). Speculation
-ships **off**; decode still hits 94+ t/s. The `mmproj` profiles pin the vision
-tower to the R9700 (`MTMD_BACKEND_DEVICE`); text stats = text-only sibling.
-`ppopt` is the pre-f16 q8_0 text-only variant (ts 1,1); kept for max prefill.
+The `mmproj` profiles pin the vision tower to the R9700 (`MTMD_BACKEND_DEVICE`);
+text stats = text-only sibling. `ppopt` is the pre-f16 q8_0 text-only variant
+(ts 1,1); kept for max prefill.
 
 ### Model menu (llamaserver)
 
@@ -221,8 +215,9 @@ or Vulkan (`HIP_VISIBLE_DEVICES=0,1`). They load on:
 
 **Key constraints:**
 
-- The XTX must stay under ~24200 MiB. At 24388 MiB the compositor was evicted to GTT
-  and the screen dropped to ~3 fps.
+- The XTX must stay under 24,200 MiB. Throughput collapses to ~20% from ~24,180 MiB
+  (GTT spillover, no crash and no failed health check), and at 24,388 MiB the
+  compositor is evicted to GTT and the screen drops to ~3 fps.
 - `--tensor-split 18,22` (ROCm) moves 2 layers to the R9700, freeing ~1.8 GiB on the XTX.
 - `MTMD_BACKEND_DEVICE=ROCm1` places the vision tower on the R9700, permanently
   keeping ~0.9 GiB + the vision transient off the constrained XTX.
@@ -274,7 +269,7 @@ comparison is still correct but the final operating point was re-tuned on the
 
 | Binary | Path | Used for |
 | --- | --- | --- |
-| mainline ROCm | `../llama.cpp/build/bin/llama-server` | All ROCm dual-GPU profiles (35B, 27B, Qwen3.8, Muse, Nemotron) |
+| mainline ROCm | `../llama.cpp/build/bin/llama-server` | All ROCm dual-GPU profiles (35B, 27B, Qwen3.8, Muse) |
 | mainline Vulkan | `../llama.cpp/build-vulkan/bin/llama-server` | All Vulkan profiles (35B, 27B, Qwen3.8, Muse, single-GPU default) |
 
 **Current state:** Mainline 10358 is the only installed engine.
@@ -404,7 +399,6 @@ dual-GPU headroom makes these ceilings moot for the tuned profiles.
 | GGUF | Size | Type |
 | --- | ---: | --- |
 | `Qwen3.6-35B-A3B-Q8_0.gguf` | 36 GB | MoE + MTP, Q8_0, **dual-GPU primary** |
-| `NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q8_0.gguf` | 33 GB | Mamba-2/attention MoE, **dual-GPU shipped (spec off)** |
 | `Qwen3.8-27B-Q8_0.gguf` | 28 GB | Dense + MTP + vision, **dual-GPU (ROCm + Vulkan)** |
 | `Muse-Glimmer-30B-Q8_0.gguf` | 28 GB | Dense + DFlash, **dual-GPU (ROCm + Vulkan, YaRN 256k variant)** |
 | `Qwen3.6-27B-MTP-Q4_K_M.gguf` | 16 GB | Dense + MTP, Q4_K_M, **single-GPU** |
@@ -486,10 +480,10 @@ llama.cpp-next/                                     next-line llama.cpp
 
 | Document | Date | Summary |
 | --- | --- | --- |
-| [QWEN36_SPECULATION_BACKEND_AUDIT.md](docs/QWEN36_SPECULATION_BACKEND_AUDIT.md) | 2026-08-11 | MTP vs DFlash, Vulkan vs ROCm, mainline vs BeeLlama, ubatch tuning, n_max optima for every model |
-| [MUSE_GLIMMER_DFLASH_BACKEND_AUDIT.md](docs/MUSE_GLIMMER_DFLASH_BACKEND_AUDIT.md) | 2026-08-11 | Muse Glimmer DFlash profiling, backend comparison |
-| [KVARN_EXPERIMENT.md](docs/KVARN_EXPERIMENT.md) | 2026-06-10 | KVarN KV-cache quantization experiments (superseded by f16 KV on dual-GPU) |
-| [KV_QUANTIZATION_COMPARISON.md](docs/KV_QUANTIZATION_COMPARISON.md) | 2026-05-27 | KVarN vs turbo vs q8_0 quality-vs-size analysis |
+| [QWEN36_SPECULATION_BACKEND_AUDIT.md](archive/model-audits/QWEN36_SPECULATION_BACKEND_AUDIT.md) | 2026-08-11 | MTP vs DFlash, Vulkan vs ROCm, mainline vs BeeLlama, ubatch tuning, n_max optima for every model |
+| [MUSE_GLIMMER_DFLASH_BACKEND_AUDIT.md](archive/model-audits/MUSE_GLIMMER_DFLASH_BACKEND_AUDIT.md) | 2026-08-11 | Muse Glimmer DFlash profiling, backend comparison |
+| [KVARN_EXPERIMENT.md](archive/kv-cache/KVARN_EXPERIMENT.md) | 2026-06-10 | KVarN KV-cache quantization experiments (superseded by f16 KV on dual-GPU) |
+| [KV_QUANTIZATION_COMPARISON.md](archive/kv-cache/KV_QUANTIZATION_COMPARISON.md) | 2026-05-27 | KVarN vs turbo vs q8_0 quality-vs-size analysis |
 | [SETUP.md](docs/SETUP.md) | 2026-05-27 | Installation and configuration guide |
 
 ---

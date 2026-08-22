@@ -1,0 +1,27 @@
+{
+  "name": "agent-chatroom",
+  "version": "0.1.0",
+  "description": "Multi-agent chatroom: MCP server + TUI for agents to question and challenge each other",
+  "type": "module",
+  "bin": {
+    "agent-chatroom-server": "./dist/server.js",
+    "agent-chatroom-mcp": "./dist/mcp-stdio.js",
+    "agent-chatroom-wake": "./dist/wake.js",
+    "agent_chatroom": "./dist/tui.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "demo": "node dist/demo.js",
+    "dev": "tsx src/server.ts"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
+  }
+}

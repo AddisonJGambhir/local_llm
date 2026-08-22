@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# vram-probe — find which (tensor-split, context) pairs actually FIT on the XTX
+# before you spend an hour benchmarking a config that will evict the desktop.
+#
+# Loads the model under llama-bench, samples card1 VRAM every 0.3s, and aborts
+# the moment it crosses LIMIT. A config is only declared FITS_PLATEAU once usage
+# has been flat for ~9s, because allocation climbs in stages and an early read
+# will lie to you.
+#
+# Usage:
+#   vram-probe <model.gguf> <outfile> <ts> <ctx> [<ts> <ctx> ...]
+#   vram-probe models/Qwen3.8-27B-Q6_K.gguf /tmp/p.txt 36/29 245760 38/27 245760
+#
+# Env: LIMIT (default 23800 — deliberately below the 24200 ceiling so an
+#      over-limit config is caught while it is still climbing, not after).
+#      SPLIT_MODE (default layer; use tensor for tensor-parallel probes).
+#      MAIN_GPU (default 1), UBATCH (default 256), BATCH (default 6144).
+#      STABLE_SAMPLES (default 30 for layer, 90 for tensor; samples are 0.3s).
+#
+# NOTE: -ts uses a SLASH for llama-bench (36/29) but a COMMA for llama-server
+#       (36,27). Mixing them up silently gives you a different split.
+set -uo pipefail
+LIMIT="${LIMIT:-23800}"
+SPLIT_MODE="${SPLIT_MODE:-layer}"
+MAIN_GPU="${MAIN_GPU:-1}"
+UBATCH="${UBATCH:-256}"
+BATCH="${BATCH:-6144}"
+if [ -n "${STABLE_SAMPLES:-}" ]; then
+    STABLE_SAMPLES="$STABLE_SAMPLES"
+elif [ "$SPLIT_MODE" = tensor ]; then
+    # Meta-device collective initialization can pause for ~10s after weights
+    # load but before KV allocation. Observe for ~27s after allocation starts,
+    # long enough to cross that gap and capture the later KV/compute peak.
+    STABLE_SAMPLES=90
+else
+    STABLE_SAMPLES=30
+fi
+SYS=/sys/class/drm/card1/device/mem_info_vram_used
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BENCH="$ROOT/llama.cpp/build/bin/llama-bench"
+
+M="${1:?model path required}"; OUT="${2:?output file required}"; shift 2
+[ -x "$BENCH" ] || { echo "vram-probe: no llama-bench at $BENCH" >&2; exit 1; }
+cd "$ROOT"
+
+while [ $# -ge 2 ]; do
+    TS="$1"; CTX="$2"; shift 2
+    # llama-bench b10358 has no `--fit off` spelling. Fit is off unless
+    # --fit-target is supplied, so deliberately do not pass that option here.
+    "$BENCH" -m "$M" -d "$CTX" -p 64 -n 1 -r 1 \
+        -ub "$UBATCH" -b "$BATCH" -ngl 99 -sm "$SPLIT_MODE" -mg "$MAIN_GPU" \
+        -ctk f16 -ctv f16 -fa on -lm none -ts "$TS" >/dev/null 2>&1 &
+    BP=$!
+    peak=0; stable=0; last=0; verdict="TIMEOUT"
+    for _ in $(seq 1 900); do
+        mib=$(( $(cat "$SYS") / 1048576 ))
+        [ "$mib" -gt "$peak" ] && peak=$mib
+        if [ "$mib" -gt "$LIMIT" ]; then
+            verdict="OVER_LIMIT"; kill -9 "$BP" 2>/dev/null; break
+        fi
+        if [ "$SPLIT_MODE" = tensor ] && [ "$mib" -gt 8000 ]; then
+            # The desktop shares this card, so whole-card VRAM can fluctuate
+            # while the benchmark allocation is stable. For tensor mode the
+            # post-allocation observation window is the reliable criterion.
+            stable=$((stable + 1))
+        elif [ "$mib" -gt 8000 ] && [ "$mib" -eq "$last" ]; then
+            stable=$((stable + 1))
+        else
+            stable=0
+        fi
+        last=$mib
+        [ "$stable" -ge "$STABLE_SAMPLES" ] && { verdict="FITS_PLATEAU"; break; }
+        kill -0 "$BP" 2>/dev/null || { verdict="EXITED_EARLY"; break; }
+        sleep 0.3
+    done
+    kill -9 "$BP" 2>/dev/null; wait "$BP" 2>/dev/null
+    echo "mode=$SPLIT_MODE mg=$MAIN_GPU ub=$UBATCH ts=$TS ctx=$CTX $verdict peak_xtx=${peak}MiB" | tee -a "$OUT"
+    sleep 8   # let VRAM actually drain before the next load
+done
+echo "PROBE_DONE" >> "$OUT"

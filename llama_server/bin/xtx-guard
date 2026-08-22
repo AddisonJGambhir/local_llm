@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# xtx-guard — hard VRAM watchdog for the 7900 XTX (card1), which drives the desktop.
+#
+# Kills llama-bench (NEVER llama-server) if the XTX approaches the ceiling where
+# the compositor gets evicted to GTT and the session drops to ~3 fps. That is not
+# an OOM boundary: llama.cpp will happily allocate past it and take the desktop
+# with it, so nothing else stops you.
+#
+# Usage:  xtx-guard [limit_mib]     (default 24200; the working ceiling)
+#
+# 24,200 is the operative limit on this box, confirmed by the owner 2026-08-20.
+# Above it: throughput collapses silently (GTT spillover, measured at 24,180 MiB
+# -- pp fell 79%, tg 38%, with no crash and a passing health check), and by
+# 24,388 MiB the compositor is evicted and the desktop drops to ~3 fps.
+#         xtx-guard 23400 &         # start it BEFORE a sweep, kill it after
+set -uo pipefail
+LIMIT="${1:-24200}"
+STREAK="${2:-3}"   # consecutive over-limit samples (~2s apart) before killing
+over=0
+LOG="${XTX_GUARD_LOG:-/tmp/xtx-guard.log}"
+SYS=/sys/class/drm/card1/device/mem_info_vram_used
+
+[ -r "$SYS" ] || { echo "xtx-guard: cannot read $SYS" >&2; exit 1; }
+echo "xtx-guard: watching card1, limit ${LIMIT} MiB, log $LOG" >&2
+
+while true; do
+    used=$(cat "$SYS" 2>/dev/null) || { sleep 2; continue; }
+    mib=$((used / 1048576))
+    # Require SUSTAINED overage. A single sample over the limit is usually a
+    # transient allocation spike during graph setup, and killing on it produces
+    # false positives on runs whose steady state is well under the ceiling.
+    if [ "$mib" -gt "$LIMIT" ]; then
+        over=$((over + 1))
+    else
+        over=0
+    fi
+    if [ "$over" -ge "$STREAK" ]; then
+        # Kill by exact process NAME, then by PID. Never `pkill -f <pattern>`:
+        # -f matches full command lines and will match this script's own shell,
+        # which has killed unrelated services on this box before.
+        for pid in $(pgrep -x llama-bench); do
+            echo "$(date +%T) TRIPPED at ${mib} MiB > ${LIMIT}, killing llama-bench pid $pid" >> "$LOG"
+            kill -9 "$pid" 2>/dev/null
+        done
+    fi
+    echo "$(date +%s) $mib" >> "$LOG"
+    sleep 2
+done

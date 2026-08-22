@@ -113,7 +113,6 @@ LLAMA_EXTRA_ARGS=(
     --tensor-split 18,22
     --main-gpu 1
     --batch-size 2048
-    --cache-reuse 256
     --no-mmap
     --mmproj "$LLAMA_SERVER_ROOT/models/mmproj-Qwen3.6-35B-A3B-BF16.gguf"
     --reasoning-preserve

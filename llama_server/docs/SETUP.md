@@ -12,14 +12,59 @@
 
 All models are stored in `~/Desktop/local_llm/llama_server/models/`.
 
-| File | Size | Architecture | Quant (Unsloth) | MTP |
-|------|------|-------------|-----------------|-----|
-| `Qwen3.6-35B-A3B-MTP-UD-IQ4_NL.gguf` | 17.26 GB | MoE (A3B), 35B params, 3B active | UD-IQ4_NL | Yes |
-| `Qwen3.6-35B-A3B-UD-IQ4_NL.gguf` | 16.80 GB | MoE (A3B), 35B params, 3B active | UD-IQ4_NL | No |
-| `Qwen3.6-27B-MTP-Q4_K_M.gguf` | 15.93 GB | Dense | Q4_K_M | Yes |
-| `Qwen3.6-27B-IQ4_NL.gguf` | 14.96 GB | Dense | IQ4_NL | No |
-| `Muse-Glimmer-30B-UD-Q5_K_M.gguf` | ~20 GB | Dense | UD-Q5_K_M | No |
-| `dflash-kquant.gguf` | 1.52 GB | Muse Glimmer DFlash sidecar | K-quant | N/A |
+Table refreshed 2026-08-17 against what is actually on disk. It previously
+listed three files that had been deleted (`Qwen3.6-35B-A3B-MTP-UD-IQ4_NL`,
+`Qwen3.6-27B-IQ4_NL`, `Muse-Glimmer-30B-UD-Q5_K_M`) and omitted every Q8_0.
+
+| File | Size | Architecture | Quant | MTP | Speculation |
+|------|------|-------------|-------|-----|-------------|
+| `Qwen3.6-35B-A3B-Q8_0.gguf` | 35.21 GiB | MoE, 35B params, 3B active | Q8_0 (unsloth) | Yes | built-in MTP |
+| `Qwen3.8-27B-Q8_0.gguf` | 27.05 GiB | Dense, 64 layers, hybrid attn | Q8_0 (unsloth) | Yes | built-in MTP |
+| `Qwen3.8-27B-Q6_K.gguf` | 21.31 GiB | Dense, 64 layers, hybrid attn | Q6_K (unsloth) | Yes | built-in MTP |
+| `Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf` | 24.14 GiB | Dense, 64 layers, hybrid attn | "Q6_K_P" (HauhauCS) | No | built-in MTP |
+| `Muse-Glimmer-30B-Q8_0.gguf` | 27.58 GiB | Dense | Q8_0 (unsloth) | No | DFlash sidecar |
+| `dflash-kquant.gguf` | 1.52 GiB | Muse Glimmer DFlash sidecar | K-quant | N/A | drafter |
+| `mmproj-BF16.gguf` | 0.87 GiB | Vision projector for Qwen3.8 27B | BF16 | N/A | N/A |
+| `mmproj-Qwen3.6-35B-A3B-BF16.gguf` | 0.84 GiB | Vision projector for Qwen3.6 35B-A3B | BF16 | N/A | N/A |
+
+### On the HauhauCS "Q6_K_P" build
+
+Downloaded and benchmarked 2026-08-18; kept for reference, NOT the default.
+SHA256 verified against the publisher's manifest (MATCH), and the manifest's
+Ed25519 signature verified. It is not malicious, but it is not new either: at
+25,924,151,424 bytes it sits within 960 bytes of unsloth's UD-Q6_K_XL, i.e. the
+UD recipe relabeled.
+
+The "FastMTP / up to 3.02x TG" claim did not reproduce. Measured against plain
+Q6_K on an idle machine:
+
+| metric | plain Q6_K (ts 38,27) | K_P (ts 34,31) |
+|--------|----------------------:|---------------:|
+| pp2048 @ d131k (unspec) | 353.30 | 323.44 |
+| tg32 @ d131k (unspec)   | 18.13  | 16.68  |
+| real MTP decode, 2 passes | 35.21 t/s | 34.51 t/s |
+| MTP draft acceptance      | 57.6%  | 55.8%  |
+| disk                      | 21.31 GiB | 24.14 GiB |
+| vision (mmproj)           | yes    | none published |
+
+MTP decode is a tie inside noise; everything else favors plain Q6_K. Being 3.04
+GB larger, K_P also cannot use the XTX-heavy splits (36/29 and 38/27 both exceed
+the 24,300 MiB ceiling), which is exactly where plain Q6_K earns its win.
+
+Download command (requires an authenticated `hf` session; anonymous transfers
+were throttled roughly 10x):
+
+```bash
+hf download HauhauCS/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF \
+    Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf \
+    --local-dir ~/Desktop/local_llm/llama_server/models
+```
+
+The two Qwen3.8 27B quants share the same `mmproj-BF16.gguf` and the same tuned
+flags; they differ only in weight size. Q6_K is 78.8% of Q8_0's bytes, which at
+`--tensor-split 1,1` should take roughly 2.9 GiB off the XTX. Neither the speed
+nor the VRAM consequence of that has been benchmarked yet -- see the header of
+`config/profiles/preset-38-27b-q6k-rocm-dual-f16-256k-mmproj.sh`.
 
 ### What is MTP?
 Multi-Token Prediction, the model predicts draft tokens ahead, then verifies them.
@@ -43,6 +88,12 @@ hf download unsloth/Muse-Glimmer-30B-GGUF Muse-Glimmer-30B-UD-Q5_K_M.gguf \
 
 # Muse Glimmer DFlash sidecar
 hf download meta-models/Muse-Glimmer-30B-GGUF dflash-kquant.gguf \
+  --local-dir ~/Desktop/local_llm/llama_server/models
+
+# Qwen3.8 27B Q6_K (added 2026-08-17). Plain Q6_K, NOT UD-Q6_K_XL: the XL
+# variant is 24.14 GiB, only 2.9 GiB under Q8_0, which gives back most of the
+# VRAM headroom this quant exists to buy.
+hf download unsloth/Qwen3.8-27B-GGUF Qwen3.8-27B-Q6_K.gguf \
   --local-dir ~/Desktop/local_llm/llama_server/models
 ```
 

@@ -58,7 +58,7 @@ LLAMA_MIN_P=0.0
 LLAMA_PRESENCE_PENALTY=0.0
 LLAMA_REPEAT_PENALTY=1.0
 LLAMA_REASONING="on"
-LLAMA_CHAT_TEMPLATE_KWARGS='{"preserve_thinking":true}'
+LLAMA_CHAT_TEMPLATE_KWARGS='{"preserve_thinking":true,"reasoning_effort":"xhigh"}'
 
 LLAMA_STARTUP_TIMEOUT=420
 LLAMA_EXTRA_ARGS=(
@@ -72,7 +72,6 @@ LLAMA_EXTRA_ARGS=(
     # Parks compute buffers + projector on the roomier R9700; speed-neutral
     # but keeps ~2.5 GiB off the XTX, which also drives the desktop.
     --main-gpu 1
-    --cache-reuse 256
     --tensor-split 28,37
     --batch-size 2048
     --no-mmap

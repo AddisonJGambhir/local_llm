@@ -45,6 +45,7 @@ MODEL_35B_MTP_Q8 = (
     f"{MODELS_DIR}/Qwen3.6-35B-A3B-Q8_0.gguf"  # MoE+MTP, Q8_0 — current primary
 )
 MODEL_35B_MOE = f"{MODELS_DIR}/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf"  # MoE plain, IQ4_NL
+# REMOVED 2026-08-22: model deleted from disk along with its presets.
 MODEL_27B_MTP = f"{MODELS_DIR}/Qwen3.6-27B-MTP-Q4_K_M.gguf"  # dense+MTP, Q4_K_M
 MODEL_27B = f"{MODELS_DIR}/Qwen3.6-27B-IQ4_NL.gguf"  # dense plain, IQ4_NL
 
@@ -134,28 +135,32 @@ CONFIGS = [
     # ══ GGUF: Qwen3.6-35B-A3B-UD-IQ4_NL  (MoE plain — base only) ════════════════
     ("MoE/IQ4 base q8_0", MODEL_35B_MOE, "q8_0", "none", BIN_MAINLINE, "rocm"),
     ("MoE/IQ4 base q8_0 (vk)", MODEL_35B_MOE, "q8_0", "none", BIN_VULKAN, "vulkan"),
-    # ══ GGUF: Qwen3.6-27B-MTP-Q4_K_M  (dense + MTP heads, Q4_K_M) ═══════════════
-    ("27B/Q4KM(mtp) base q8_0", MODEL_27B_MTP, "q8_0", "none", BIN_MAINLINE, "rocm"),
-    ("27B/Q4KM(mtp) +MTP q8_0", MODEL_27B_MTP, "q8_0", "mtp", BIN_MAINLINE, "rocm"),
-    (
-        "27B/Q4KM(mtp) base q8_0 (vk)",
-        MODEL_27B_MTP,
-        "q8_0",
-        "none",
-        BIN_VULKAN,
-        "vulkan",
-    ),
-    (
-        "27B/Q4KM(mtp) +MTP q8_0 (vk)",
-        MODEL_27B_MTP,
-        "q8_0",
-        "mtp",
-        BIN_VULKAN,
-        "vulkan",
-    ),
-    # ══ GGUF: Qwen3.6-27B-IQ4_NL  (dense plain — base only) ═════════════════════
-    ("27B/IQ4 base q8_0", MODEL_27B, "q8_0", "none", BIN_MAINLINE, "rocm"),
-    ("27B/IQ4 base q8_0 (vk)", MODEL_27B, "q8_0", "none", BIN_VULKAN, "vulkan"),
+    # ══ REMOVED 2026-08-22 ═══════════════════════════════════════════════════
+    # Qwen3.6-27B-MTP-Q4_K_M.gguf was deleted from disk along with its presets.
+    # Qwen3.6-27B-IQ4_NL.gguf was already gone. Both blocks are kept commented
+    # so the shape of the old matrix is recoverable if either model returns.
+    # # ══ GGUF: Qwen3.6-27B-MTP-Q4_K_M  (dense + MTP heads, Q4_K_M) ═══════════════
+    # ("27B/Q4KM(mtp) base q8_0", MODEL_27B_MTP, "q8_0", "none", BIN_MAINLINE, "rocm"),
+    # ("27B/Q4KM(mtp) +MTP q8_0", MODEL_27B_MTP, "q8_0", "mtp", BIN_MAINLINE, "rocm"),
+    # (
+    # "27B/Q4KM(mtp) base q8_0 (vk)",
+    # MODEL_27B_MTP,
+    # "q8_0",
+    # "none",
+    # BIN_VULKAN,
+    # "vulkan",
+    # ),
+    # (
+    # "27B/Q4KM(mtp) +MTP q8_0 (vk)",
+    # MODEL_27B_MTP,
+    # "q8_0",
+    # "mtp",
+    # BIN_VULKAN,
+    # "vulkan",
+    # ),
+    # # ══ GGUF: Qwen3.6-27B-IQ4_NL  (dense plain — base only) ═════════════════════
+    # ("27B/IQ4 base q8_0", MODEL_27B, "q8_0", "none", BIN_MAINLINE, "rocm"),
+    # ("27B/IQ4 base q8_0 (vk)", MODEL_27B, "q8_0", "none", BIN_VULKAN, "vulkan"),
 ]
 
 PROMPT_CORPUS = (

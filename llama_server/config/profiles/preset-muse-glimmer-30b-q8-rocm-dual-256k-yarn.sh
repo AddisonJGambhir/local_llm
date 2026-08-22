@@ -70,7 +70,6 @@ LLAMA_EXTRA_ARGS=(
     --main-gpu 1
     --batch-size 6144
     --ctx-checkpoints 8
-    --cache-reuse 256
     --no-mmap
     # YaRN context extension 131072 -> 262144. Runtime override only; the GGUF is
     # NOT patched. --override-kv is required as well as the rope flags, otherwise

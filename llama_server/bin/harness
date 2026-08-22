@@ -13,9 +13,10 @@ echo "  5) OpenCode     (opencode)"
 echo "  6) OpenClaw     (openclaw)"
 echo "  7) Cline        (cline)"
 echo "  8) OpenHands    (openhands)"
-echo "  9) Kilo Code    (kilo)"
+echo "  9) DeepSeek Harness (dsh-local)"
+echo " 10) Prime Agent (prime-agent)"
 echo ""
-read -p "Selection (1/2/3/4/5/6/7/8/9): " CHOICE
+read -p "Selection (1/2/3/4/5/6/7/8/9/10): " CHOICE
 echo ""
 
 # Helper: open a command in a new terminal window
@@ -112,10 +113,12 @@ case "$CHOICE" in
         exec openhands --override-with-envs
         ;;
     9)
-        # Kilo CLI uses the OpenCode-compatible provider configuration in
-        # ~/.config/kilo/kilo.jsonc and defaults to llama-local/local.
-        echo "Starting Kilo Code (local llama.cpp on :1234)..."
-        exec kilo
+        echo "Starting DeepSeek Harness (local llama.cpp on :1234)..."
+        exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dsh-local"
+        ;;
+    10)
+        echo "Starting Prime Agent (local Qwen3.8 via llama.cpp on :1234)..."
+        exec prime-agent --provider local-llama --model local
         ;;
     *) echo "Invalid selection: '$CHOICE'"; exit 1 ;;
 esac
