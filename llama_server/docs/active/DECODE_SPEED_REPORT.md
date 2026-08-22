@@ -364,7 +364,7 @@ Done in a scratch worktree (now durable: ~/Desktop/local_llm/llama.cpp-tp-trial,
   The PR's comm-init loop needed a 12-line port (null-safe transfer queue,
   .get() for raw pointers). Applied in the scratch tree; compiles clean.
 - **BUILD COMPLETE: 459/459 targets, zero errors.** Binaries at
-  ~/tmp-tp-trial/build/bin (llama-server, llama-bench, ...); RUNPATH is absolute
+  ~/Desktop/local_llm/llama.cpp-tp-trial/build/bin (llama-server, llama-bench, ...); RUNPATH is absolute
   so no LD_LIBRARY_PATH is needed. Smoke-tested: llama-server --version runs,
   detects both RADV devices, reports build 10600 @ 7c80213c3. No GPU work
   performed. After the worktree moved off /tmp, the build was reconfigured at
@@ -427,7 +427,7 @@ the ~45-knob null table in AMD_DUAL_GPU_TUNING.md)
 | A4 | Mesa 26.0.3 -> latest: re-scoped to PREFILL interest (F17: no decode movement from any Mesa/RADV knob per OP exhaustive table). Still worth reading 26.1/26.2 RADV changelogs for the multi-GPU semaphore bug behind the PR #25051 decode-crawl workaround | Driver layer never touched | low (prefill) / med (multi-GPU bug watch) | med (system pkg, user approval) | main (inline) |
 | A5 | ~~RADV_* env sweep~~ **MOSTLY RESOLVED by F17**: OP tested RADV_DEBUG=nocompute, RADV_PERFTEST=sam/bolist/localbos/dmashaders/nircache/hic/nogttspill, RADV_PROFILE_PSTATE - all zero on RDNA4. Only survivor is queue selection, which is A13b (llama.cpp-level env). | - | - | - | closed |
 | A6 | taskset llama-server onto X3D CCD (A/B on next scheduled restart, no extra GPU cost). NOTE F17: CPU pinning was tested NULL on the OP's 9900X box; X3D V-cache is the only reason it might differ here - low expectations | CPU affinity never tested on THIS box | low | low | queued (needs restart window) |
-| A7 | **READY, FOLDED INTO A1 BINARY (F21)** - adaptive MTP (#27210) applied+compiled in ~/tmp-tp-trial/build/bin. Test: `--spec-type draft-mtp-adaptive --spec-draft-n-max 12 --spec-draft-n-min-adaptive 3` vs current draft-mtp n_max 3, coding workload (PR claim: +9.6% coding / tie prose on 2x R9700 ROCm). Cherry-pick #27210
+| A7 | **READY, FOLDED INTO A1 BINARY (F21)** - adaptive MTP (#27210) applied+compiled in ~/Desktop/local_llm/llama.cpp-tp-trial/build/bin. Test: `--spec-type draft-mtp-adaptive --spec-draft-n-max 12 --spec-draft-n-min-adaptive 3` vs current draft-mtp n_max 3, coding workload (PR claim: +9.6% coding / tie prose on 2x R9700 ROCm). Cherry-pick #27210
 | A8 | ~~open-PR cherry-pick eval~~ **RESOLVED**: #27210 promoted to A7; #27489 = memory-only (saves ~1 GiB, auto-enable restricted to single-CUDA-device MTP path, no speed gain, N/A here); #25319 = watch-only (API consensus PR, two prior attempts reverted, high risk); #26827 N/A (np=1); #24720 (vulkan graph reuse, +25% claim on Intel 4xB60) = watch, not cherry-pickable without risk | - | - | - | closed |
 | A9 | ROCm 7.2 (or latest) vs 7.1 on Ubuntu 26.04: hipBLAS/flash-attn small-batch decode deltas | Package never upgraded | low-med | high (risk) | main (inline) |
 | A10 | Context-size decode check on the RUNNING profile: 216k (XTX near ceiling, possible GTT pressure) vs 131k decode t/s | "Context is free" was measured on ROCm Q6 163-196k; Vulkan Q8 @216k near-ceiling untested | low | low (needs GPU window) | queued |
@@ -435,7 +435,7 @@ the ~45-knob null table in AMD_DUAL_GPU_TUNING.md)
 
 | A12 | Deep-context tensor decode cliff probe (F12: two no-P2P boxes report 9-11 t/s at 60-160k KV on this PR build; our live 32-41 t/s is at shallow depth). Command (free-GPU window, ~10 min, needs the R9700 free so the XTX stays under ceiling):
 `cd ~/Desktop/local_llm/llama.cpp-vulkan-tp && export LD_LIBRARY_PATH=$PWD/build/bin && for d in 0 65536 131072 196608; do ./build/bin/llama-bench -m ~/Desktop/local_llm/llama_server/models/Qwen3.8-27B-Q8_0.gguf -ngl 99 -c 216064 -b 2048 -ub 1024 -fa 1 -ctk f16 -ctv f16 --no-mmap --split-mode tensor --main-gpu 1 --tensor-split 50,50 -p 1024 -n 128 -d $d; done`
-The A1 trial build (~/tmp-tp-trial/build/bin) is READY (F21): swap LLAMA_BINARY/LLAMA_BENCH to it and re-run the same 4 depths for a direct cliff A/B (old base vs rebased base). Note: llama-bench tg does not include MTP; a collapse in plain tg predicts one in MTP. | Never measured at depth | med-high | low (bench only) | queued (free-GPU window) |
+The A1 trial build (~/Desktop/local_llm/llama.cpp-tp-trial/build/bin) is READY (F21): swap LLAMA_BINARY/LLAMA_BENCH to it and re-run the same 4 depths for a direct cliff A/B (old base vs rebased base). Note: llama-bench tg does not include MTP; a collapse in plain tg predicts one in MTP. | Never measured at depth | med-high | low (bench only) | queued (free-GPU window) |
 
 | A13 | Force `power_dpm_force_performance_level` (high/performance) on both cards, A/B the decode matrix (F17: conflicting reports, both cards currently "auto") | Never tested here | low | low (needs sudo, 2 writes) | queued (user present) |
 | A13b | `GGML_VK_ALLOW_GRAPHICS_QUEUE=1` on the Vulkan TP profile at next restart (F17: OP=zero, JohnTDI=small positive; one env var, zero risk) | Never tested here | low | trivial | queued (needs restart window) |

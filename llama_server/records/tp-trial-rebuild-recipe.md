@@ -7,7 +7,11 @@ What this build is:
 
 Live locations (durable):
   Source worktree: ~/Desktop/local_llm/llama.cpp-tp-trial
-  Build dir:       ~/tmp-tp-trial/build   (binaries: ~/tmp-tp-trial/build/bin)
+  Build dir:       ~/Desktop/local_llm/llama.cpp-tp-trial/build  (in-worktree, gitignored by /llama.cpp*/)
+  Binaries:        ~/Desktop/local_llm/llama.cpp-tp-trial/build/bin
+  RUNPATH is absolute to that bin dir: the binaries run from any cwd with no
+  LD_LIBRARY_PATH. Moving or renaming the build dir BREAKS them (they die with
+  'libllama-server-impl.so: cannot open shared object file') -- rebuild instead of mv.
 
 Rebuild from scratch if the worktree is ever lost:
   cd ~/Desktop/local_llm/llama.cpp
@@ -19,8 +23,8 @@ Rebuild from scratch if the worktree is ever lost:
   git rebase --onto origin/master $MB HEAD      # applied with ZERO conflicts 2026-08-22
   git apply ~/Desktop/local_llm/llama_server/records/vk-queue-unique-ptr-port.patch
   git apply ~/Desktop/local_llm/llama_server/records/pr27210-adaptive-mtp.diff
-  cmake -G Ninja -S . -B ~/tmp-tp-trial/build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DGGML_CUDA=OFF
-  cmake --build ~/tmp-tp-trial/build -j16       # ~10 min on this box
+  cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DGGML_CUDA=OFF -DGGML_CCACHE=ON
+  cmake --build build -j20      # 841 targets, ~6 min on this box with ccache warm
 
 Port patch note (records/vk-queue-unique-ptr-port.patch):
   Master converted vk_device queues to std::unique_ptr<vk_queue>; the PR's
