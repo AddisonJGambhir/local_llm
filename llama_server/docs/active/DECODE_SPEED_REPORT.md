@@ -367,9 +367,9 @@ Done in a scratch worktree (now durable: ~/Desktop/local_llm/llama.cpp-tp-trial,
   ~/tmp-tp-trial/build/bin (llama-server, llama-bench, ...); RUNPATH is absolute
   so no LD_LIBRARY_PATH is needed. Smoke-tested: llama-server --version runs,
   detects both RADV devices, reports build 10600 @ 7c80213c3. No GPU work
-  performed. (After the worktree moved off /tmp, a reconfigure+rebuild of the
-  same tree started in background to keep the build dir consistent; the old
-  build is kept at ~/tmp-tp-trial/build-old until the new one verifies.)
+  performed. After the worktree moved off /tmp, the build was reconfigured at
+  the new source path and rebuilt in full (841/841 targets, 0 errors); binaries
+  re-verified (build 10600 @ 7c80213c3, draft-mtp-adaptive present).
 - A1 is now READY: user just swaps the binary (or re-points the preset's
   LLAMA_BINARY; no LD_LIBRARY_PATH needed) and restarts in a free-GPU window.
   Durable source worktree: ~/Desktop/local_llm/llama.cpp-tp-trial.
