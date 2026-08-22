@@ -34,10 +34,10 @@ TRB  = "7c80213c3-rebased"          # #25051 rebased on master b21e4de74 + #2721
 MRG  = "merged-tp-adaptive"         # #25051 + #27210 ported (this session)
 SRC  = "records/2026-08-22-adaptive-mtp/"
 
-def srv(build, split, ratio, spec, content, tg, pp=None, peak="", nmax="", nmin="", notes=""):
+def srv(build, split, ratio, spec, content, tg, pp=None, peak="", nmax="", nmin="", notes="", ctx=98304):
     tgm, tgs = agg(tg); ppm, pps = agg(pp or [])
     add(date="2026-08-22", method="server", model=M, quant=Q8, backend="vulkan",
-        build=build, split_mode=split, ratio=ratio, ctx=98304, kv="f16",
+        build=build, split_mode=split, ratio=ratio, ctx=ctx, kv="f16",
         spec_type=spec, n_max=nmax, n_min_ad=nmin, content=content, reps=len(tg),
         pp_mean=ppm, pp_sd=pps, tg_mean=tgm, tg_sd=tgs, peak_xtx_mib=peak,
         source=SRC, notes=notes)
@@ -64,6 +64,12 @@ srv(MRG, "tensor", "50/50", "draft-mtp", "agentic", [56.08,58.57,56.32],
 srv(MRG, "tensor", "50/50", "draft-mtp-adaptive", "agentic", [86.95,71.33,86.72],
     pp=[644.2,629.9,593.9], peak=20388, nmax=12, nmin=3,
     notes="BEST: +43.3% vs tensor n3, prefill unchanged, +736 MiB XTX")
+
+# 256k f16 sizing on the merged build (text-only, adaptive), real work under load
+srv(MRG, "tensor", "49/51", "draft-mtp-adaptive", "synthetic-4.9k", [50.86],
+    pp=[809.0], peak=23521, nmax=12, nmin=3, ctx=262144, notes="SHIPPED preset; headroom 679 MiB")
+srv(MRG, "tensor", "45/55", "draft-mtp-adaptive", "synthetic-4.9k", [49.14],
+    pp=[809.8], peak=22820, nmax=12, nmin=3, ctx=262144, notes="fallback ratio; headroom 1380 MiB")
 
 # ---------------------------------------------------------------- llama-bench history
 src = os.path.join(ROOT, "output", "benchmarks", "2026-08-21-pr25051", "all_runs.csv")

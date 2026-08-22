@@ -108,7 +108,7 @@ llama_validate_profile() {
         *) llama_die "unsupported backend: $LLAMA_BACKEND" || return ;;
     esac
     case "$LLAMA_SPEC_MODE" in
-        none|mtp|dflash) ;;
+        none|mtp|mtp-adaptive|dflash) ;;
         *) llama_die "unsupported speculative mode: $LLAMA_SPEC_MODE" || return ;;
     esac
     if [[ "$LLAMA_SPEC_MODE" == "dflash" && ! -r "${LLAMA_DRAFTER:-}" ]]; then
@@ -163,6 +163,24 @@ llama_build_command() {
                 --spec-type draft-mtp
                 --spec-draft-n-max "${LLAMA_SPEC_DRAFT_N_MAX:-2}"
                 --spec-draft-p-min "${LLAMA_SPEC_DRAFT_P_MIN:-0.0}"
+            )
+            if [[ -n "${LLAMA_SPEC_DRAFT_TYPE_K:-}" ]]; then
+                LLAMA_CMD+=(--spec-draft-type-k "$LLAMA_SPEC_DRAFT_TYPE_K")
+            fi
+            if [[ -n "${LLAMA_SPEC_DRAFT_TYPE_V:-}" ]]; then
+                LLAMA_CMD+=(--spec-draft-type-v "$LLAMA_SPEC_DRAFT_TYPE_V")
+            fi
+            ;;
+        mtp-adaptive)
+            # Adaptive MTP (PR #27210, ported onto PR #25051 in llama.cpp-tp-adaptive).
+            # Draft depth starts at n-min-adaptive and climbs toward n-max as the
+            # controller observes acceptance. Deliberately no --spec-draft-p-min:
+            # every p_min > 0 measured slower on both content types (2026-08-22
+            # sweep), despite raising acceptance.
+            LLAMA_CMD+=(
+                --spec-type draft-mtp-adaptive
+                --spec-draft-n-max "${LLAMA_SPEC_DRAFT_N_MAX:-12}"
+                --spec-draft-n-min-adaptive "${LLAMA_SPEC_DRAFT_N_MIN_ADAPTIVE:-3}"
             )
             if [[ -n "${LLAMA_SPEC_DRAFT_TYPE_K:-}" ]]; then
                 LLAMA_CMD+=(--spec-draft-type-k "$LLAMA_SPEC_DRAFT_TYPE_K")
