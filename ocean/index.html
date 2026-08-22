@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ocean — Three.js</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        height: 100%;
+        background: #0a1420;
+      }
+      #info {
+        position: absolute;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #dfe9f3;
+        font:
+          13px/1.4 -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+        background: rgba(8, 20, 32, 0.55);
+        padding: 8px 16px;
+        border-radius: 8px;
+        backdrop-filter: blur(6px);
+        pointer-events: none;
+        text-align: center;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      #hint {
+        opacity: 0.7;
+        font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      <b>Ocean</b>
+      <div id="hint">
+        drag to orbit &middot; scroll to zoom &middot; arrow keys / &larr;&rarr;
+        to move the sun
+      </div>
+    </div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+      import { Water } from "three/addons/objects/Water.js";
+      import { Sky } from "three/addons/objects/Sky.js";
+
+      // ---------- Renderer ----------
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 0.6;
+      document.body.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(
+        55,
+        window.innerWidth / window.innerHeight,
+        1.0,
+        20000,
+      );
+      camera.position.set(0, 5, 60);
+
+      // ---------- Controls ----------
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.maxPolarAngle = Math.PI * 0.495;
+      controls.minDistance = 10;
+      controls.maxDistance = 300;
+      controls.target.set(0, 3, 0);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.06;
+      controls.update();
+
+      // ---------- Sun / Sky ----------
+      const sky = new Sky();
+      sky.scale.setScalar(10000);
+      scene.add(sky);
+
+      const skyU = sky.material.uniforms;
+      skyU.turbidity.value = 8;
+      skyU.rayleigh.value = 2.2;
+      skyU.mieCoefficient.value = 0.004;
+      skyU.mieDirectionalG.value = 0.75;
+
+      const sun = new THREE.Vector3();
+      let sunElevation = 12; // degrees
+      let sunAzimuth = 180; // degrees
+
+      function updateSun() {
+        const phi = THREE.MathUtils.degToRad(90 - sunElevation);
+        const theta = THREE.MathUtils.degToRad(sunAzimuth);
+        sun.setFromSphericalCoords(1, phi, theta);
+        skyU.sunPosition.value.copy(sun);
+        if (water)
+          water.material.uniforms.sunDirection.value.copy(sun).normalize();
+      }
+
+      // ---------- Water normal map ----------
+      // Try the classic three.js water normals; fall back to a procedural one so the
+      // scene still works fully offline.
+      async function getNormalMap() {
+        try {
+          const tex = await new Promise((resolve, reject) => {
+            const t = new THREE.TextureLoader().load(
+              "https://threejs.org/examples/textures/waternormals.jpg",
+              resolve,
+              undefined,
+              reject,
+            );
+          });
+          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+          return tex;
+        } catch {
+          return proceduralNormalMap();
+        }
+      }
+
+      function proceduralNormalMap() {
+        const size = 256;
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        const img = ctx.createImageData(size, size);
+        // Height field: sum of a few tiled sinusoidal waves -> tileable
+        const h = new Float32Array(size * size);
+        const waves = [
+          [64, 6, 0.9],
+          [32, 11, 0.55],
+          [16, 19, 0.35],
+          [96, 4, 0.7],
+          [128, 2.5, 1.0],
+        ];
+        for (let y = 0; y < size; y++) {
+          for (let x = 0; x < size; x++) {
+            let v = 0;
+            for (const [freq, phase, amp] of waves) {
+              v +=
+                Math.sin((x / size) * Math.PI * 2 * freq + phase) *
+                amp *
+                Math.cos(
+                  (y / size) * Math.PI * 2 * (freq | 1 || 1) + phase * 1.7,
+                ) *
+                amp;
+            }
+            h[y * size + x] = v;
+          }
+        }
+        const s = 3.0; // normal strength
+        for (let y = 0; y < size; y++) {
+          for (let x = 0; x < size; x++) {
+            const xl = h[y * size + ((x - 1 + size) % size)];
+            const xr = h[y * size + ((x + 1) % size)];
+            const yu = h[((y - 1 + size) % size) * size + x];
+            const yd = h[((y + 1) % size) * size + x];
+            const n = new THREE.Vector3(xl - xr, yu - yd, s).normalize();
+            const i = (y * size + x) * 4;
+            img.data[i] = (n.x * 0.5 + 0.5) * 255;
+            img.data[i + 1] = (n.y * 0.5 + 0.5) * 255;
+            img.data[i + 2] = (n.z * 0.5 + 0.5) * 255;
+            img.data[i + 3] = 255;
+          }
+        }
+        ctx.putImageData(img, 0, 0);
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+      }
+
+      // ---------- Water ----------
+      const waterU = {
+        time: 1.0,
+        size: 60.0,
+        distortionScale: 4.0,
+        sunColor: new THREE.Color(0xffffff),
+        waterColor: new THREE.Color(0x001e2f),
+        eye: new THREE.Vector3(),
+        sunDirection: new THREE.Vector3(0, 1, 0),
+        normalSampler: new THREE.DataTexture(),
+      };
+
+      let water = null;
+      async function initWater() {
+        const normalMap = await getNormalMap();
+        waterU.normalSampler = normalMap;
+
+        const geometry = new THREE.PlaneGeometry(10000, 10000);
+        water = new Water(geometry, {
+          textureWidth: 512,
+          textureHeight: 512,
+          waterNormals: normalMap,
+          sunDirection: sun.clone(),
+          sunColor: 0xffffff,
+          waterColor: 0x001e2f,
+          distortionScale: 3.5,
+          fog: scene.fog !== undefined,
+        });
+        water.rotation.x = -Math.PI / 2;
+        scene.add(water);
+      }
+
+      // ---------- A little sailboat for scale ----------
+      function createBoat() {
+        const boat = new THREE.Group();
+
+        const hullMat = new THREE.MeshStandardMaterial({
+          color: 0x5a3a24,
+          roughness: 0.7,
+        });
+        const deckMat = new THREE.MeshStandardMaterial({
+          color: 0x8a6a48,
+          roughness: 0.8,
+        });
+        const sailMat = new THREE.MeshStandardMaterial({
+          color: 0xf2ede2,
+          roughness: 0.9,
+          side: THREE.DoubleSide,
+        });
+        const mastMat = new THREE.MeshStandardMaterial({
+          color: 0x2e241c,
+          roughness: 0.6,
+        });
+
+        // Hull: stretched, tapered box
+        const hull = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.9, 0.55, 4.5, 8, 1),
+          hullMat,
+        );
+        hull.scale.set(0.55, 1, 1);
+        hull.rotation.z = Math.PI / 2;
+        hull.position.y = -0.5;
+        boat.add(hull);
+
+        // Bow
+        const bow = new THREE.Mesh(
+          new THREE.ConeGeometry(0.5, 1.6, 8),
+          hullMat,
+        );
+        bow.rotation.z = -Math.PI / 2;
+        bow.scale.set(0.55, 1, 1);
+        bow.position.set(3.05, -0.5, 0);
+        boat.add(bow);
+
+        // Deck
+        const deck = new THREE.Mesh(
+          new THREE.BoxGeometry(4.2, 0.12, 1.0),
+          deckMat,
+        );
+        deck.position.y = 0.05;
+        boat.add(deck);
+
+        // Mast
+        const mast = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.05, 0.07, 4.6, 6),
+          mastMat,
+        );
+        mast.position.set(-0.2, 2.3, 0);
+        boat.add(mast);
+
+        // Mainsail
+        const sailShape = new THREE.Shape();
+        sailShape.moveTo(0, 0);
+        sailShape.lineTo(0, 4.0);
+        sailShape.quadraticCurveTo(1.6, 2.4, 1.9, 0.15);
+        sailShape.closePath();
+        const sail = new THREE.Mesh(
+          new THREE.ShapeGeometry(sailShape),
+          sailMat,
+        );
+        sail.position.set(-0.2, 0.3, 0);
+        sail.rotation.y = Math.PI / 2;
+        boat.add(sail);
+
+        // Jib (front sail)
+        const jibShape = new THREE.Shape();
+        jibShape.moveTo(0, 0);
+        jibShape.lineTo(0, 3.0);
+        jibShape.lineTo(1.3, 0.1);
+        jibShape.closePath();
+        const jib = new THREE.Mesh(new THREE.ShapeGeometry(jibShape), sailMat);
+        jib.position.set(-0.2, 0.4, 0);
+        jib.rotation.y = -Math.PI / 2;
+        jib.rotation.z = 0.18;
+        boat.add(jib);
+
+        // Flag
+        const flag = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.5, 0.25, 8, 1),
+          new THREE.MeshStandardMaterial({
+            color: 0xc0392b,
+            side: THREE.DoubleSide,
+            roughness: 0.9,
+          }),
+        );
+        flag.position.set(0.05, 4.6, 0);
+        boat.add(flag);
+
+        boat.position.set(-25, 0.4, -70);
+        boat.rotation.y = 0.5;
+        boat.traverse((o) => {
+          if (o.isMesh) o.castShadow = false;
+        });
+        return boat;
+      }
+
+      // ---------- Birds ----------
+      const birds = new THREE.Group();
+      const birdList = [];
+      function createBirds(count = 5) {
+        const mat = new THREE.MeshBasicMaterial({
+          color: 0x1a1a1a,
+          side: THREE.DoubleSide,
+        });
+        for (let i = 0; i < count; i++) {
+          const g = new THREE.Group();
+          const wingGeo = new THREE.PlaneGeometry(1.1, 0.28);
+          const left = new THREE.Mesh(wingGeo, mat);
+          left.position.x = -0.55;
+          const right = new THREE.Mesh(wingGeo, mat);
+          right.position.x = 0.55;
+          g.add(left, right);
+          g.position.set(
+            (Math.random() - 0.5) * 300,
+            25 + Math.random() * 30,
+            (Math.random() - 0.5) * 300 - 60,
+          );
+          g.userData = {
+            left,
+            right,
+            speed: 2 + Math.random() * 3,
+            phase: Math.random() * Math.PI * 2,
+            radius: 30 + Math.random() * 80,
+            cx: g.position.x,
+            cz: g.position.z,
+            flapSpeed: 4 + Math.random() * 3,
+          };
+          birds.add(g);
+          birdList.push(g);
+        }
+        return birds;
+      }
+
+      // ---------- Lights (subtle, sky carries most of it) ----------
+      const hemi = new THREE.HemisphereLight(0xbfd9e8, 0x0a2a3a, 0.5);
+      scene.add(hemi);
+      const dir = new THREE.DirectionalLight(0xfff0d8, 1.1);
+      scene.add(dir);
+      scene.add(dir.target);
+
+      // ---------- Keyboard: move the sun ----------
+      addEventListener("keydown", (e) => {
+        if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+          sunElevation = THREE.MathUtils.clamp(
+            sunElevation + (e.key === "ArrowUp" ? 1 : -1),
+            0.5,
+            60,
+          );
+          updateSun();
+        }
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          sunAzimuth =
+            (sunAzimuth + (e.key === "ArrowRight" ? 4 : -4) + 360) % 360;
+          updateSun();
+        }
+      });
+
+      // ---------- Ambient audio (gentle wave loop, generated) ----------
+      function startWaveAudio() {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const bufferSize = 2 * ctx.sampleRate;
+        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        // Pink-ish noise via filtered white noise
+        let b0 = 0,
+          b1 = 0,
+          b2 = 0;
+        for (let i = 0; i < bufferSize; i++) {
+          const white = Math.random() * 2 - 1;
+          b0 = 0.997 * b0 + 0.029 * white;
+          b1 = 0.985 * b1 + 0.032 * white;
+          b2 = 0.95 * b2 + 0.048 * white;
+          data[i] = (b0 + b1 + b2) * 0.35;
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.loop = true;
+        const gain = ctx.createGain();
+        gain.gain.value = 0.0;
+        // slow LFO to mimic wave swells
+        const lfo = ctx.createOscillator();
+        lfo.frequency.value = 0.12;
+        const lfoGain = ctx.createGain();
+        lfoGain.gain.value = 0.18;
+        lfo.connect(lfoGain).connect(gain.gain);
+        gain.gain.value = 0.2;
+        src.connect(gain).connect(ctx.destination);
+        src.start();
+        lfo.start();
+      }
+      // Start on first interaction (browser autoplay policy)
+      let audioStarted = false;
+      addEventListener(
+        "pointerdown",
+        () => {
+          if (!audioStarted) {
+            audioStarted = true;
+            try {
+              startWaveAudio();
+            } catch {}
+          }
+        },
+        { once: false },
+      );
+
+      // ---------- Boot ----------
+      const clock = new THREE.Clock();
+
+      scene.add(createBoat());
+      scene.add(createBirds());
+      updateSun();
+      initWater();
+
+      // Gentle auto-drift of the boat
+      const boat = scene.children.find(
+        (o) => o.isGroup && o.children.length > 2 && o.position.z < 0,
+      );
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      function tick() {
+        requestAnimationFrame(tick);
+        const t = clock.getElapsedTime();
+
+        if (water) {
+          water.material.uniforms.time.value = t * 0.5;
+          water.material.uniforms.eye.value.copy(camera.position);
+        }
+
+        // Sun-tracked directional light
+        dir.position.copy(sun).multiplyScalar(200);
+        dir.target.position.set(0, 0, 0);
+
+        // Tint hemi light with sun elevation (warmer at sunset)
+        const dayness = THREE.MathUtils.clamp(sunElevation / 30, 0, 1);
+        dir.intensity = 0.4 + dayness * 0.9;
+        dir.color.setHSL(0.09, 0.45 + (1 - dayness) * 0.4, 0.75);
+        hemi.intensity = 0.25 + dayness * 0.35;
+
+        // Boat: gentle bobbing and drift
+        if (boat) {
+          boat.position.y = 0.4 + Math.sin(t * 0.7) * 0.25;
+          boat.rotation.z = Math.sin(t * 0.6) * 0.035;
+          boat.rotation.x = Math.cos(t * 0.5) * 0.025;
+          boat.position.x = -25 + Math.sin(t * 0.05) * 15;
+        }
+
+        // Birds: circle + flap
+        for (const b of birdList) {
+          const u = b.userData;
+          const a = t * (u.speed / u.radius) + u.phase;
+          b.position.x = u.cx + Math.cos(a) * u.radius;
+          b.position.z = u.cz + Math.sin(a) * u.radius;
+          b.position.y += Math.sin(t * 0.8 + u.phase) * 0.008;
+          b.rotation.y = -a + Math.PI / 2;
+          const flap = Math.sin(t * u.flapSpeed + u.phase) * 0.6;
+          u.left.rotation.z = flap;
+          u.right.rotation.z = -flap;
+        }
+
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      tick();
+    </script>
+  </body>
+</html>

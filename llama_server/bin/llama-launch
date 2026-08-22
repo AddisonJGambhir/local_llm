@@ -203,7 +203,7 @@ case "$BACKEND_CHOICE" in
             echo "    3) vision   — MTP n3 — f16 — 256k  ( 825 pp /  35.0 tg) [L 28,37 · vis]"
             echo "    4) TENSOR   — MTP n3 — f16 — 216k  ( 947 pp /  40.3 tg MTP, 2x prefill) [T 50,50 · vis] [PR #25051]"
             echo "    5) TENSOR   — MTP n3 — f16 — 256k FULL ctx  (~19 tg raw, text-only) [T 49,51 · txt] [PR #25051]"
-            echo "    6) TENSOR+ADAPTIVE — f16 — 256k FULL  (809 pp / 50.9 tg; 81.7 tg @98k) [T 49,51 · txt] ★"
+            echo "    6) TENSOR+ADAPTIVE — f16 — 256k FULL  (809 pp / 50.9 tg; 81.7 tg @98k) [T 49,51 · vis] ★"
             echo
             echo "  Qwen 3.8 27B dense  Q6_K (unsloth) — tensor split [PR #25051]"
             echo "    7) decode  — MTP n3 — q8_0 — 192k  ( 697 pp / 28.65 tg unspec, longest fast ctx) [T 70,30 · vis]"

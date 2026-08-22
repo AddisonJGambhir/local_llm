@@ -27,15 +27,19 @@
 # over the same-ratio n3 build at 256k, vs +736 MiB at c=98304), so it is fixed
 # draft state rather than anything per-token.
 #
-# TEXT-ONLY, deliberately. The vision projector does not fit alongside 256k f16
-# KV on the XTX. For vision use the 216k profile
-# (preset-38-27b-q8-vulkan-tensor-decode-200k.sh), which carries --mmproj.
+# VISION ON THE R9700. --main-gpu does NOT cover the vision tower; clip.cpp only
+# honours MTMD_BACKEND_DEVICE and otherwise grabs the FIRST device, the
+# constrained XTX. Parking the 889 MiB tower on Vulkan1 keeps it off the card
+# that also drives the desktop, and the R9700 has ~5.5 GiB free at this context.
 #
 # EXPERIMENTAL: both PRs are unmerged. Re-measure when either lands upstream.
 # ============================================================================
 
 #!/usr/bin/env bash
 source "$LLAMA_SERVER_ROOT/config/profiles/default.sh"
+
+# Vulkan1 = R9700 (verified: Vulkan0 is the 7900 XTX, Vulkan1 the AI PRO R9700).
+export MTMD_BACKEND_DEVICE=Vulkan1
 
 PROFILE_NAME="preset-38-27b-q8-vulkan-TENSOR-ADAPTIVE-f16-256k"
 LLAMA_BINARY="$LLM_ROOT/llama.cpp-tp-adaptive/build/bin/llama-server"
@@ -77,4 +81,5 @@ LLAMA_EXTRA_ARGS=(
     --tensor-split 49,51
     --batch-size 2048
     --no-mmap
+    --mmproj "$LLAMA_SERVER_ROOT/models/mmproj-BF16.gguf"
 )
