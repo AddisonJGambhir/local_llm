@@ -66,17 +66,28 @@ decode matrix (llama-bench -r3, MTP off) + one live MTP sample. The PR is a
 draft and unmerged; rebase may need conflict work (commits touch
 ggml-backend-meta.cpp which changed in #26502/#27433 merge+revert).
 
-### F3. [online-verified] New ROCm build: upstream now has `GGML_HIP_UNSAFE_MATH`
-#26696 (merged) made `-funsafe-math-optimizations` an opt-in CMake flag
-(default OFF). This is why b10450 measured -4.8% pp / -4.0% tg. The
-TUNING_QUEUE work item "b10450 + one-line -funsafe-math patch" is now just:
-rebuild `llama.cpp` at current master with `-DGGML_HIP_UNSAFE_MATH=ON`.
-Current master is 136+ commits past llama.cpp-next, 12 days past the pin.
-Gain unknown: must re-run matrix; b10450-with-flag should at least match pin.
-Note: #26696 also added a gfx1151 CI check asserting MTP stays byte-identical
-at temp 0 - suggests unsafe-math + MTP has a correctness caveat worth testing
-(temperature-0 greedy compare) after any upgrade.
-
+### F3. [online-verified, CORRECTED 2026-08-22] ROCm build: #26696 REMOVED -funsafe-math-optimizations (no opt-in exists)
+(Earlier draft wrongly said #26696 added a GGML_HIP_UNSAFE_MATH CMake flag - the
+PR body described that, but the merged commit e79e4bf66 (2026-08-13) ONLY
+deletes the 3-line flag block from ggml/src/ggml-hip/CMakeLists.txt.
+`git grep GGML_HIP_UNSAFE_MATH origin/master` = empty. Verified directly.)
+Consequences:
+- The pinned ROCm build (030ebb558, 2026-08-10) was compiled WITH
+  -funsafe-math-optimizations (hardcoded pre-#26696). Every ROCm build from
+  2026-08-13 onwards loses it -> the measured b10450 -4.8% pp / -4.0% tg
+  regression is exactly this flag.
+- To restore the speed in ANY future ROCm rebuild: one-line patch
+  `set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -funsafe-math-optimizations")`
+  back into ggml/src/ggml-hip/CMakeLists.txt. This is the TUNING_QUEUE
+  "one-line patch" item - it remains a patch, not a cmake flag.
+- Tradeoff (from the #26696 body, accurate): -funsafe-math-optimizations
+  enables -fassociative-math -> FP reassociation can flip near-tie greedy
+  argmax (reported on gfx1151) -> MTP output can diverge from the
+  non-speculative baseline at temp 0. The reported flips are RDNA3.5; this box
+  is gfx1100+gfx1201. We already RUN the unsafe-math pinned build with no
+  observed divergence, so the cost is accepted in practice.
+- The PR body also promised a gfx1151 CI byte-identity check; it did NOT land
+  in master (not in .github/). No CI guard exists for this.
 ### F4. [candidate] Open PRs that touch MTP decode (not merged, cherry-pick candidates)
 - **#27210** "spec: add adaptive MTP draft depth (draft-mtp-adaptive)" - open,
   updated 2026-08-22. Mainline already has `--adaptive-target` (off in prod).
@@ -121,8 +132,9 @@ a design constraint (desktop on XTX), not a driver bug.
 It is 92 commits over the pinned 030ebb558 and 136 under current master b21e4de74.
 Critically it CONTAINS `e79e4bf66 ggml-hip: remove -funsafe-math-optimizations
 (#26696)` - i.e. the next-line build is the SLOW one (same -4.8%/-4.0% regression
-the box saw on b10450). Anything benchmarked against `llama.cpp-next` must carry
-`-DGGML_HIP_UNSAFE_MATH=ON` (flag exists from #26696; default OFF) to be comparable.
+the box saw on b10450). To make any build at/after that commit comparable with
+the pinned ROCm build, re-add the one-line -funsafe-math-optimizations flag
+(F3; no CMake option exists).
 Also in pin..next, decode-relevant: #27133 server yield_to_queue thread-model
 re-design, #27041 metrics during decode, #27005 auto-detect MTP draft type,
 #26623 ggml_ssm_scan recurrent-state rollback. All ride along for free with an
@@ -220,17 +232,23 @@ Implications:
 - MTP under tensor: draft head runs with devices=[default] (NOT tensor-split);
   backend sampling is unavailable under tensor (see F15).
 
-### F15. [measured, local log] MTP draft model uses a CPU sampler under -sm tensor
+### F15. [measured, local log] MTP draft model uses a CPU sampler under -sm tensor (both backends)
 Current server log, model load:
   `common_speculative_impl_draft_mtp: - n_max=3, n_min=0, p_min=0.00, backend_sampling=1`
   `set_sampler: backend sampling not supported with SPLIT_MODE_TENSOR; using CPU`
   `common_speculative_impl_draft_mtp: backend offload failed for seq_id=0; using CPU sampler`
-So every draft+target sample is done on CPU (151k vocab, top-k 20) on the
-running profile, while the ROCm profile (best decode) gets backend (GPU)
-sampling. That is a previously unisolated component of the Vulkan-vs-ROCm decode
-gap and of A11 (sampler cost). Merging #24710 (regex) + this + backend sampling
-support under tensor are the three decode-path deltas a rebase/upgrade could
-plausibly unlock.
+CORRECTION 2026-08-22 (earlier draft wrongly attributed GPU sampling to the
+ROCm profile): the exclusion lives in `llama_context::set_sampler`
+(src/llama-context.cpp:1219) and is BACKEND-AGNOSTIC - it was introduced by
+#23287 (2026-05-20, "Move to backend sampling for MTP draft path") and is
+present in the pinned ROCm build (030ebb558) as well as every current tree.
+Both the ROCm tensor profile and the Vulkan TP profile therefore sample
+MTP on the CPU (151k vocab). The F1 Vulkan-vs-ROCm decode gap (40.3 vs
+48.8-54 t/s) is PURE backend compute speed, not a sampler asymmetry.
+No open upstream PR enables backend sampling under SPLIT_MODE_TENSOR
+(searched 2026-08-22). A11 (sampler cost) applies equally to both profiles;
+a GPU-sampler patch under tensor would be original work, not a cherry-pick.
+The rebase (A1) still unlocks the #24710 regex fix and ~228 other commits.
 
 ### F16. [online-verified] PR #27210 adaptive MTP: tested on the SAME model class, big code win
 PR #27210 (`--spec-type draft-mtp-adaptive --spec-draft-n-max 12`) was benchmarked by
@@ -329,29 +347,101 @@ for Qwen3.6-27B dense - consistent with F1 (ROCm already wins decode here).
 Upgrading to 7.2.x = AMD repo + kernel/driver coupling risk (A9 stays
 high-effort; only after the build-side items pay off).
 
+### F21. [measured, local] Trial rebase of PR #25051 onto current master: ZERO conflicts
+Done in a scratch worktree (now durable: ~/Desktop/local_llm/llama.cpp-tp-trial, detached; real tree untouched).
+- Merge base: 3fc4e1052 (#20793). 14 PR commits applied cleanly onto
+  origin/master (b21e4de74, 2026-08-22) with no textual conflicts.
+- Exact PR footprint on the new tree: **4 files, +938/-4**:
+  ggml/src/ggml-vulkan/ggml-vulkan.cpp (+907: ring + tree allreduce, comm init,
+  buffer-shrink fix), ggml/src/ggml-backend-meta.cpp (+16),
+  ggml/src/ggml-backend.cpp (+14), ggml/src/ggml-backend-impl.h (+3).
+- Master moved the ggml sources from src/ to ggml/src/ - git's rename tracking
+  placed every hunk correctly (ring code verified present at line ~19262).
+- Rebased head contains c749cb041 (#24710, static tensor-split regex - the decode
+  thread fix) plus ~228 commits of other fixes.
+- Risk was one behavioral drift: master converted vk_device queues to
+  std::unique_ptr<vk_queue> (raw .queue handle now at ->handle->queue).
+  The PR's comm-init loop needed a 12-line port (null-safe transfer queue,
+  .get() for raw pointers). Applied in the scratch tree; compiles clean.
+- **BUILD COMPLETE: 459/459 targets, zero errors.** Binaries at
+  ~/tmp-tp-trial/build/bin (llama-server, llama-bench, ...); RUNPATH is absolute
+  so no LD_LIBRARY_PATH is needed. Smoke-tested: llama-server --version runs,
+  detects both RADV devices, reports build 10600 @ 7c80213c3. No GPU work
+  performed. (After the worktree moved off /tmp, a reconfigure+rebuild of the
+  same tree started in background to keep the build dir consistent; the old
+  build is kept at ~/tmp-tp-trial/build-old until the new one verifies.)
+- A1 is now READY: user just swaps the binary (or re-points the preset's
+  LLAMA_BINARY; no LD_LIBRARY_PATH needed) and restarts in a free-GPU window.
+  Durable source worktree: ~/Desktop/local_llm/llama.cpp-tp-trial.
+  Rebuild-from-scratch recipe + both patches: llama_server/records/
+  (tp-trial-rebuild-recipe.md, vk-queue-unique-ptr-port.patch,
+  pr27210-adaptive-mtp.diff). To make permanent: fold the 12-line port into
+  the real worktree and rebuild, or adopt llama.cpp-tp-trial as the new
+  llama.cpp-vulkan-tp.
+- **A7 FOLDED IN:** #27210 (adaptive MTP) trial-applied on the same rebased
+  tree - `git apply --check` clean (offsets only), applied, 237-target
+  rebuild clean, 0 errors. Binary verified: `--spec-type` list now includes
+  `draft-mtp-adaptive`, new flag `--spec-draft-n-min-adaptive` (default 3,
+  floor of the adaptive range; `--spec-draft-n-max` is the ceiling).
+  Usage for the A/B: `--spec-type draft-mtp-adaptive --spec-draft-n-max 12
+  --spec-draft-n-min-adaptive 3` vs the current `draft-mtp n_max 3`.
+  So ONE binary now covers both A1 (rebase/regex/228 commits) and A7
+  (adaptive MTP) - the free-GPU A/B tests both at once.
+  The #27210 benchmark (+9.6% coding) ran on 2x R9700 ROCm Q8_0 - our Vulkan
+  TP tensor path is untested by the PR author, so the local number is the
+  one that counts.
+- A2 (ROCm build with GGML_HIP_UNSAFE_MATH=ON) can run the same matrix with
+  the new tree if desired.
+
+### F22. [online-verified] Vulkan+MTP self-spec crash class after kernel bumps (watch item, not an action)
+#27460 (2026-08-20): Qwen3.8-27B draft-mtp (shared-layer self-spec - our exact
+mode) crashes on Vulkan/RADV gfx1201 after Linux kernel 7.1.3 -> 7.1.7; same
+class as #24492 ("pre-allocated tensor cannot run operation NONE"). Clean
+bisector: identical binary+Mesa, crash follows the kernel -> KMD interaction.
+#24492 is OPEN (reopened 2026-08-18); NO fix in current master.
+Our box: kernel 7.0.0-30-generic, Mesa 26.0.3 - unaffected so far (running
+server stable). WARNING: if the Vulkan TP + MTP profile starts crashing after a
+kernel/Mesa update, suspect the KMD first; the ROCm profile does not use Vulkan
+and is the fallback. Keep this in mind for A4 (Mesa upgrade).
+
+### F23. [online-verified] MTP costs ~100% of prefill under multi-GPU LAYER split (bug); tensor cost untested
+#27428 (2026-08-21, build 10499): Qwen3.8-27B Q6/Q3 + draft-mtp, RTX 4090
+laptop + RX 7900 XTX layer split: pp drops ~1000 -> ~500 t/s with MTP on
+(single GPU: only ~3%). Setting the draft-MTP device to one GPU recovers only 8%.
+Our box uses TENSOR split on both profiles, so the 100% figure is not expected
+to transfer; the expected tensor cost is the redundant draft-head compute
+(~3-8%). UNTESTED here - queued as A15 (cheap probe in the free-GPU window):
+pp8192 with and without --spec-type draft-mtp on the Vulkan TP profile.
+If the tensor penalty is large, a dedicated MTP-off prefill server would be a
+real pp win for cold-read work.
+
 ## ACTION QUEUE (strictly untested-on-this-box items; cross-checked against
 the ~45-knob null table in AMD_DUAL_GPU_TUNING.md)
 
 | # | Action | Why untested | Value est. | Effort | Status |
 |---|--------|--------------|-----------|--------|--------|
 | A1 | Rebase #25051's 14 commits onto master b21e4de74, rebuild Vulkan TP, re-run decode matrix (-r3, MTP off) + 1 live MTP sample. PR is stalled (author vacated 2026-08-16) so a local rebase is the only path to the fixes | Base is 766 commits stale; #24710 (30% of decode thread in regex, merged 2026-07-10) + #24814 are missing from the RUNNING build; #24720 (vulkan graph reuse, +25% claim on Intel) stays a separate cherry-pick eval | med-high | med (rebase conflicts in ggml-backend-meta.cpp possible; #26502 merged+reverted in that window) | not started |
-| A2 | Rebuild ROCm at master with `-DGGML_HIP_UNSAFE_MATH=ON` (replaces the "one-line patch" TUNING_QUEUE item); run 2026-08-16-style matrix vs pin | Only b10450-WITHOUT-flag was tested; the flag is now first-class; 228 fresh commits | med | low-med | not started |
+| A2 | ROCm upgrade path: pinned build already HAS unsafe-math (pre-#26696); A2 only matters when rebuilding ROCm at a newer commit - then re-add the one-line `-funsafe-math-optimizations` to ggml/src/ggml-hip/CMakeLists.txt (F3, no CMake flag exists). Re-run the pp/tg matrix + temp-0 MTP identity check. | - | med (at upgrade) | low | queued (at next ROCm rebuild) |
 | A3a | ~~link-width check~~ **DONE -> F13.** R9700 = Gen4 x4 chain (15.75 GB/s; docs said 7.9), final segment Gen5 x16; XTX Gen4 x16 (docs said 5.0) | - | - | - | closed |
 | A3b | dmesg amdgpu errors/throttling history (needs sudo, user present) | Never checked | low | low (read-only) | queued (user present) |
 | A4 | Mesa 26.0.3 -> latest: re-scoped to PREFILL interest (F17: no decode movement from any Mesa/RADV knob per OP exhaustive table). Still worth reading 26.1/26.2 RADV changelogs for the multi-GPU semaphore bug behind the PR #25051 decode-crawl workaround | Driver layer never touched | low (prefill) / med (multi-GPU bug watch) | med (system pkg, user approval) | main (inline) |
 | A5 | ~~RADV_* env sweep~~ **MOSTLY RESOLVED by F17**: OP tested RADV_DEBUG=nocompute, RADV_PERFTEST=sam/bolist/localbos/dmashaders/nircache/hic/nogttspill, RADV_PROFILE_PSTATE - all zero on RDNA4. Only survivor is queue selection, which is A13b (llama.cpp-level env). | - | - | - | closed |
 | A6 | taskset llama-server onto X3D CCD (A/B on next scheduled restart, no extra GPU cost). NOTE F17: CPU pinning was tested NULL on the OP's 9900X box; X3D V-cache is the only reason it might differ here - low expectations | CPU affinity never tested on THIS box | low | low | queued (needs restart window) |
-| A7 | **Cherry-pick #27210 (draft-mtp-adaptive) onto the pinned ROCm build; test `--spec-type draft-mtp-adaptive --spec-draft-n-max 12` on the ROCm tensor Q6_K 58/42 profile, fixed 4-prompt protocol + one real coding session, at shallow AND ~60k depth** (F16: +9.6% coding on 2x R9700, prose tie; only common/ files touched) | Fixed-depth sweeps only; adaptive on dense 27B never tested; MoE test (negative) does not transfer | **med-high** | med (small build + protocol) | queued (needs GPU window) |
+| A7 | **READY, FOLDED INTO A1 BINARY (F21)** - adaptive MTP (#27210) applied+compiled in ~/tmp-tp-trial/build/bin. Test: `--spec-type draft-mtp-adaptive --spec-draft-n-max 12 --spec-draft-n-min-adaptive 3` vs current draft-mtp n_max 3, coding workload (PR claim: +9.6% coding / tie prose on 2x R9700 ROCm). Cherry-pick #27210
 | A8 | ~~open-PR cherry-pick eval~~ **RESOLVED**: #27210 promoted to A7; #27489 = memory-only (saves ~1 GiB, auto-enable restricted to single-CUDA-device MTP path, no speed gain, N/A here); #25319 = watch-only (API consensus PR, two prior attempts reverted, high risk); #26827 N/A (np=1); #24720 (vulkan graph reuse, +25% claim on Intel 4xB60) = watch, not cherry-pickable without risk | - | - | - | closed |
 | A9 | ROCm 7.2 (or latest) vs 7.1 on Ubuntu 26.04: hipBLAS/flash-attn small-batch decode deltas | Package never upgraded | low-med | high (risk) | main (inline) |
 | A10 | Context-size decode check on the RUNNING profile: 216k (XTX near ceiling, possible GTT pressure) vs 131k decode t/s | "Context is free" was measured on ROCm Q6 163-196k; Vulkan Q8 @216k near-ceiling untested | low | low (needs GPU window) | queued |
 | A11 | Sampling-cost check: (a) temp 1.0 top-k 20 vs temp 0 greedy live decode on same prompt; (b) Vulkan-tensor (CPU sampler per F15) vs ROCm (GPU sampler) on the SAME model/quant/split to isolate sampler+backend contribution | Never isolated the sampler cost; F15 shows the running profile samples on CPU | low-med | low (needs GPU window) | queued |
 
-| A12 | Deep-context tensor decode cliff check (running profile, no restart needed beyond a probe): live probe at ~60k and ~120k KV depth (llama-bench -d 65536 on the PR build after llamakill, or a long live generation) to confirm/refute the no-P2P tensor tg collapse (9-11 t/s reported by 2 other boxes) | Our own matrix left vulkan-pr tensor tg@d65536 as TODO; two independent no-P2P boxes report catastrophic deep-ctx tensor decode on the PR build | **med-high (could invalidate the running profile for long sessions)** | low (one llama-bench run) | queued (needs GPU window) |
+| A12 | Deep-context tensor decode cliff probe (F12: two no-P2P boxes report 9-11 t/s at 60-160k KV on this PR build; our live 32-41 t/s is at shallow depth). Command (free-GPU window, ~10 min, needs the R9700 free so the XTX stays under ceiling):
+`cd ~/Desktop/local_llm/llama.cpp-vulkan-tp && export LD_LIBRARY_PATH=$PWD/build/bin && for d in 0 65536 131072 196608; do ./build/bin/llama-bench -m ~/Desktop/local_llm/llama_server/models/Qwen3.8-27B-Q8_0.gguf -ngl 99 -c 216064 -b 2048 -ub 1024 -fa 1 -ctk f16 -ctv f16 --no-mmap --split-mode tensor --main-gpu 1 --tensor-split 50,50 -p 1024 -n 128 -d $d; done`
+The A1 trial build (~/tmp-tp-trial/build/bin) is READY (F21): swap LLAMA_BINARY/LLAMA_BENCH to it and re-run the same 4 depths for a direct cliff A/B (old base vs rebased base). Note: llama-bench tg does not include MTP; a collapse in plain tg predicts one in MTP. | Never measured at depth | med-high | low (bench only) | queued (free-GPU window) |
 
 | A13 | Force `power_dpm_force_performance_level` (high/performance) on both cards, A/B the decode matrix (F17: conflicting reports, both cards currently "auto") | Never tested here | low | low (needs sudo, 2 writes) | queued (user present) |
 | A13b | `GGML_VK_ALLOW_GRAPHICS_QUEUE=1` on the Vulkan TP profile at next restart (F17: OP=zero, JohnTDI=small positive; one env var, zero risk) | Never tested here | low | trivial | queued (needs restart window) |
 | A14 | Install AMDVLK as a second ICD; A/B the PR-build decode matrix via VK_ICD_FILENAMES (F17: OP +11.7% dense with rm_kq=1). Risk: PR #25051 cross-device allreduce uncharted on AMDVLK - if it breaks, ICD file removal restores status quo | AMDVLK never installed here | low-med | med (pkg install, no system default touched) | queued (user approval) |
+
+| A15 | MTP prefill cost on the TENSOR profile (F23): same server flags, pp8192 with and without --spec-type draft-mtp (server or llama-perplexity, 2 runs each). If >10%: consider a dedicated MTP-off prefill instance for cold reads. | Never measured | low-med | low (bench only) | queued (free-GPU window, bundle with A12) |
 
 NOT on the queue (tested null/negative locally - kept out deliberately):
 GGML_VK_* envs (whole list), GGML_CUDA AR envs (whole list), RCCL, -t, -ub,
