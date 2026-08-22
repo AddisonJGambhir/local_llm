@@ -415,6 +415,76 @@ pp8192 with and without --spec-type draft-mtp on the Vulkan TP profile.
 If the tensor penalty is large, a dedicated MTP-off prefill server would be a
 real pp win for cold-read work.
 
+## Findings F24-F28 (2026-08-22, post-bench IRL analysis)
+
+### F28 - #24710 (per-call regex compilation in meta split-state) patched into the live tree
+The running tree (llama.cpp-tp-adaptive @13ac90156 + #27210 port) still contained
+the pre-#24710 code: `llama_meta_device_get_split_state` compiled 29 std::regex
+patterns on EVERY call, and ggml-backend-meta calls that for every tensor op in
+graph build/execute (per decode step and per MTP draft step). Applied the
+upstream-merged one-word fix (29x `const std::regex` -> `static const std::regex`,
+src/llama-model.cpp; diff-verified identical to #24710's shape), incremental
+relink (18/18 targets, 2 min). New binary on disk at the same path the supervisor
+uses (build 9834 @13ac90156); running process (old inode) unaffected. Next
+planned restart picks up the fix automatically. PR reporter profiled ~30% of the
+decode thread in regex on a 2-GPU tensor setup; expect smaller here (decode step
+is GPU-bound ~30ms) but it is free CPU and removes a known waste. No server
+touching; no tree git state modified (working-tree patch only, tree is mid-
+resolution of the #27210 port).
+
+
+### F24 - Adaptive MTP gain is a CONTENT-REGIME effect; IRL it sits at the floor
+IRL server (preset 6, merged-tp-adaptive, tensor 49/51, c=262144) log, task 1076
+(13k tokens, ~49k live ctx): draft acceptance 0.442, mean acceptance length 2.37,
+per-position (marginal) = (0.641, 0.420, 0.277, 0.024, 0.004, 0.001, 0...).
+Controller stats: #gen tokens 20261 / 6564 rounds = **avg draft depth 3.09** - the
+controller sat at the floor (3) on real content, exactly as designed. Deep
+positions 4-12 added a total +0.03 tokens/round (+1.3%). IRL decode = 31.56 t/s at
+49k ctx (34-38 at 34k) - i.e. adaptive ≈ n3 on real content. The bench +43%
+(81.67 vs 56.99) came from the degenerate prompt (1958 tok of the SAME tool call
+repeated ~50x) where p4..p12 stay live and the controller climbs to n12.
+Consequently: bench absolutes are inflated ~2.5x by content (81.67 bench vs
+31.6-38 IRL; mean acceptance length bench ≈ 6-7 vs IRL 2.37). Headline IRL number
+is 31.5-38 t/s. The interconnect-amortization hypothesis (deep drafts amortize
+no-P2P allreduce latency) is a real secondary effect (per-op ring latency is
+~constant in batch; extra draft layers cost only 1/48 of a target layer each) but
+cannot be the main driver of the 4x gap vs PR #27210's +9.6%: if it were, IRL
+n12 would beat IRL n3, and it does not.
+
+### F25 - The novel +103% (35.90 -> 72.85) is arithmetically impossible as a
+controller effect => contaminated
+At any plausible per-round cost ratio T12/T3 in [1.1, 1.6], reaching 2.03x
+throughput on novel requires marginal acceptance p4..p12 ≈ 0.18-0.30/position -
+5-10x the IRL deep-position acceptance (0.024, 0.004, 0.001). The n3 novel
+baseline (35.9) behaves as low-acceptance content; the adaptive novel runs
+(79.67, 77.88, 79.98, 53.87 - note 3 tight + 1 outlier, sd 12.69) behaved as
+high-acceptance content. With the box's proven non-determinism (3 runs, 3 hashes
+at temp 0/top_k 1) + temp 0 + ignore_eos + 2048 tokens, the adaptive runs
+generated different (partly repetitive-loop) text than the n3 runs. Verdict:
+text mismatch, not a controller gain. Re-test only with per-run acceptance
+counters (now in the log): if adaptive-novel p4..p12 ≈ 0, discard.
+
+### F26 - "backend sampling not supported with SPLIT_MODE_TENSOR" costs ~1.5-2%
+src/llama-context.cpp:1196 (set_sampler): tensor split erases the backend sampler
+unconditionally; logits (~150k vocab x batch<=13 f32, up to ~8 MB) are copied to
+CPU and the chain (temp 1.0/top-p 0.95/top-k 20 IRL) runs there, ~1-1.5 ms per
+75 ms round. No meta-backend sampling implementation exists upstream (the guard is
+unconditional; nothing in ggml-backend-meta). Layer split is NOT affected (last
+layer's logits live on a real GPU) - one of the small structural edges of the
+layer profile. The MTP draft's own sampler also falls back to CPU ("backend
+offload failed ... using CPU sampler", 24 log lines). Not where the headroom is.
+
+### F27 - Client request storm + oversized grammars + fast log rotation
+In an 18-min window the server's task counter reached ~107,732 while only ~1,100
+tasks generated tokens: a client is POSTing empty-messages chat requests at
+~1000/s ("Jinja Exception: No messages provided"), 22 requests failed with
+"grammar: ... exceeds sane defaults" (oversized JSON-schema grammars), 22
+"failed to launch slot" (slot busy), plus 22 "AllReduce init failed (n_devices !=
+?); falling back to meta-backend butterfly" (benign fallback). The 50 MB log
+rotates every ~4 min under this churn - bench-time acceptance evidence rotated
+out of reach. Fix: find and stop the retry-loop client; it is CPU/slot-lock
+contamination under any benchmark.
+
 ## ACTION QUEUE (strictly untested-on-this-box items; cross-checked against
 the ~45-knob null table in AMD_DUAL_GPU_TUNING.md)
 
@@ -434,14 +504,17 @@ the ~45-knob null table in AMD_DUAL_GPU_TUNING.md)
 | A11 | Sampling-cost check: (a) temp 1.0 top-k 20 vs temp 0 greedy live decode on same prompt; (b) Vulkan-tensor (CPU sampler per F15) vs ROCm (GPU sampler) on the SAME model/quant/split to isolate sampler+backend contribution | Never isolated the sampler cost; F15 shows the running profile samples on CPU | low-med | low (needs GPU window) | queued |
 
 | A12 | Deep-context tensor decode cliff probe (F12: two no-P2P boxes report 9-11 t/s at 60-160k KV on this PR build; our live 32-41 t/s is at shallow depth). Command (free-GPU window, ~10 min, needs the R9700 free so the XTX stays under ceiling):
-`cd ~/Desktop/local_llm/llama.cpp-vulkan-tp && export LD_LIBRARY_PATH=$PWD/build/bin && for d in 0 65536 131072 196608; do ./build/bin/llama-bench -m ~/Desktop/local_llm/llama_server/models/Qwen3.8-27B-Q8_0.gguf -ngl 99 -c 216064 -b 2048 -ub 1024 -fa 1 -ctk f16 -ctv f16 --no-mmap --split-mode tensor --main-gpu 1 --tensor-split 50,50 -p 1024 -n 128 -d $d; done`
-The A1 trial build (~/Desktop/local_llm/llama.cpp-tp-trial/build/bin) is READY (F21): swap LLAMA_BINARY/LLAMA_BENCH to it and re-run the same 4 depths for a direct cliff A/B (old base vs rebased base). Note: llama-bench tg does not include MTP; a collapse in plain tg predicts one in MTP. | Never measured at depth | med-high | low (bench only) | queued (free-GPU window) |
+`cd ~/Desktop/local_llm/llama.cpp-tp-adaptive && export LD_LIBRARY_PATH=$PWD/build/bin && for d in 0 65536 131072 196608; do ./build/bin/llama-bench -m ~/Desktop/local_llm/llama_server/models/Qwen3.8-27B-Q8_0.gguf -ngl 99 -c 216064 -b 2048 -ub 1024 -fa 1 -ctk f16 -ctv f16 --no-mmap --split-mode tensor --main-gpu 1 --tensor-split 50,50 -p 1024 -n 128 -d $d; done`
+Use the CURRENT tree's binary (~/Desktop/local_llm/llama.cpp-tp-adaptive/build/bin) for the probe; the tp-trial/rebase path is DEAD (rebase onto new master breaks -sm tensor). Update (F24): no cliff at 49k IRL (31.56 t/s) - focus on the 131072/196608 points; pair n3 vs adaptive per depth where the tool allows. Note: llama-bench tg does not include MTP; a collapse in plain tg predicts one in MTP. | 49k clear; 131k/196k unmeasured | med | low (bench only) | queued (free-GPU window) |
 
 | A13 | Force `power_dpm_force_performance_level` (high/performance) on both cards, A/B the decode matrix (F17: conflicting reports, both cards currently "auto") | Never tested here | low | low (needs sudo, 2 writes) | queued (user present) |
 | A13b | `GGML_VK_ALLOW_GRAPHICS_QUEUE=1` on the Vulkan TP profile at next restart (F17: OP=zero, JohnTDI=small positive; one env var, zero risk) | Never tested here | low | trivial | queued (needs restart window) |
 | A14 | Install AMDVLK as a second ICD; A/B the PR-build decode matrix via VK_ICD_FILENAMES (F17: OP +11.7% dense with rm_kq=1). Risk: PR #25051 cross-device allreduce uncharted on AMDVLK - if it breaks, ICD file removal restores status quo | AMDVLK never installed here | low-med | med (pkg install, no system default touched) | queued (user approval) |
 
 | A15 | MTP prefill cost on the TENSOR profile (F23): same server flags, pp8192 with and without --spec-type draft-mtp (server or llama-perplexity, 2 runs each). If >10%: consider a dedicated MTP-off prefill instance for cold reads. | Never measured | low-med | low (bench only) | queued (free-GPU window, bundle with A12) |
+| A16 | **Adaptive-vs-n3 clean A/B on real content** (decides the true IRL value of adaptive; F24 says ≈0, unproven): next restart, same preset 6 flags with `--spec-draft-n-max 3` (floor still 3) for one session, then compare IRL tg + per-position acceptance vs the current adaptive logs (F24 baseline: 31.56 t/s @49k, mean len 2.37) | F24 shows bench +43% is content-regime; IRL n3 baseline missing | high | low (restart window) | queued (next restart) |
+| A17 | **Find and stop the empty-messages client storm** (F27: ~1000 req/s, task counter 107k/18min, 22 oversized-grammar rejects, log rotates ~4min). Check llama_server clients/harness for a retry loop POSTing empty chat bodies; the churn contaminates benches and destroys log evidence | F27 | high (bench validity) | trivial once found | queued (user) |
+| A18 | **Bench method fix**: relabel 81.67 as "repetitive-content regime"; add a realistic agentic cell (diverse tool calls, not the same call x50) and record per-run acceptance counters in the CSV (they are in the server log already) | F24/F25 | med | trivial | queued |
 
 NOT on the queue (tested null/negative locally - kept out deliberately):
 GGML_VK_* envs (whole list), GGML_CUDA AR envs (whole list), RCCL, -t, -ub,
