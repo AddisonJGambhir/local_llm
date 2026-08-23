@@ -1,0 +1,5 @@
+split,ratio,ub,b,depth,pp,tg,peak_xtx_mib,status
+tensor,49/51,1024,2048,0,,,24411,CEILING_OR_FAIL
+tensor,49/51,512,4096,0,,,24418,CEILING_OR_FAIL
+tensor,49/51,512,8192,0,,,24416,CEILING_OR_FAIL
+tensor,25/75,1024,2048,0,,,23727,CEILING

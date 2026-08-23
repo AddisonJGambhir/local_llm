@@ -1,0 +1,6 @@
+build,split,ts,main_gpu,ub,b,pp,peak_xtx
+tp-adaptive,tensor,50/50,1,1024,2048,396.13,17157
+tp-adaptive,tensor,50/50,0,1024,2048,396.15,17159
+tp-adaptive,row,-,0,1024,2048,1238.29,13427
+vulkan-tp,tensor,50/50,1,1024,2048,395.87,17159
+vulkan-tp,tensor,50/50,0,1024,2048,395.78,17185

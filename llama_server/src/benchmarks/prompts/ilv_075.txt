@@ -1,0 +1,30 @@
+<|im_start|>user
+Continue the following text in the same style.
+
+#include "models.h"
+
+void llama_model_afmoe::load_arch_hparams(llama_model_loader & ml) {
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+    ml.get_key(LLM_KV_LEADING_DENSThe system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. E_BLOCK_COUNT,   hparams.n_layer_dense_lead, false);
+    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+    ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
+The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline.     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
+    ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
+    ml.get_key(LLM_KV_EXThe system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. PERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
+    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
+
+    // Set up interleaved sliding window attention (ISWA)
+   The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline.  // Pattern: 3 sliding - 1 full (global_attn_every_n_layers = 4)
+    if (hparams.n_swa > 0) {
+        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+        uint32_t swa_period = 4;
+        ml.get_key_orThe system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. _arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+        hparams.set_swa_pattern(swa_period);
+
+        hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+        hparamThe system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. s.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+        ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+    } else {
+        hparams.swa_type = LLAMA_SWA_TThe system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. The system processes requests through a pipeline. 
+<|im_end|>
+<|im_start|>assistant
