@@ -19,6 +19,22 @@ def dry(p):
                        capture_output=True, text=True)
     return r.stdout.strip() if r.returncode == 0 else ""
 
+def mtmd_device(profile_path):
+    """Resolve MTMD_BACKEND_DEVICE the way llamactl does: source the profile.
+
+    Grepping the profile text alone is wrong -- most tensor-decode presets inherit
+    the export from a parent via `source`, so a text grep reports "NOT routed" for
+    a profile that is in fact routed. Verified 2026-08-23: all four *-tensor-decode
+    presets inherit MTMD_BACKEND_DEVICE=ROCm1 from their parent.
+    """
+    env = dict(os.environ, LLAMA_SERVER_ROOT=ROOT, LLM_ROOT=os.path.dirname(ROOT))
+    env.pop("MTMD_BACKEND_DEVICE", None)
+    r = subprocess.run(["bash","-c",
+                        f'source "{profile_path}" >/dev/null 2>&1; '
+                        f'printf "%s" "${{MTMD_BACKEND_DEVICE:-}}"'],
+                       capture_output=True, text=True, env=env)
+    return r.stdout.strip() or None
+
 def one(v, pat, default="-"):
     m = re.search(pat, v)
     return m.group(1).replace("\\","") if m else default
@@ -44,8 +60,8 @@ for p in sorted(glob.glob(os.path.join(PROF, "preset-*.sh"))):
     ub     = one(cmd, r"--ubatch-size (\d+)")
     vis    = "yes" if "--mmproj" in cmd else "no"
     if vis == "yes":
-        dev = re.search(r"MTMD_BACKEND_DEVICE=(\S+)", src)
-        vis += f" (tower on {dev.group(1)})" if dev else " (tower NOT routed - defaults to first device, the XTX)"
+        dev = mtmd_device(p)
+        vis += f" (tower on {dev})" if dev else " (tower NOT routed - defaults to first device, the XTX)"
     spec_s = spec if spec == "none" else f"{spec}  n_max {nmax}" + (f"  n_min_adaptive {nmin}" if nmin != "-" else "")
 
     facts = "\n".join([

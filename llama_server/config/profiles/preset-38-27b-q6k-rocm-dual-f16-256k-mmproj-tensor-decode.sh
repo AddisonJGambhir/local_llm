@@ -4,7 +4,7 @@
 # SPLIT    tensor 1,1   (XTX,R9700)   main-gpu 1   ubatch 256
 # CONTEXT  245760   KV f16
 # SPEC     draft-mtp  n_max 3
-# VISION   yes (tower NOT routed - defaults to first device, the XTX)
+# VISION   yes (tower on ROCm1)
 # VRAM     XTX ceiling 24200 MiB - see MEASURED below for this profile's peak
 # MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)
 # ===== END FACTS =====

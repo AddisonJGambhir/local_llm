@@ -8,7 +8,7 @@ off (note it, do not optimize it).
 ## Setup (ground truth)
 
 | | |
-|---|---|
+| --- | --- |
 | GPU0 (ROCm0/Vulkan0) | RX 7900 XTX, gfx1100, 24,560 MiB. Drives desktop. HARD CEILING 24,200 MiB (GTT collapse, no crash). |
 | GPU1 (ROCm1/Vulkan1) | AI PRO R9700, gfx1201, 32,624 MiB, Gen4 x4 via chipset. No P2P, no xGMI. |
 | CPU/RAM | Ryzen 9 9950X3D 16C/32T, 64 GB |
@@ -20,7 +20,7 @@ off (note it, do not optimize it).
 ### Builds on disk
 
 | Worktree | Commit | Date | Role |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `llama.cpp` | 030ebb558 (master) | 2026-08-10 | pinned ROCm + stock Vulkan (b10358) |
 | `llama.cpp-vulkan-tp` | 13ac90156 (PR #25051 head) | forked ~2026-06-29, **766 commits behind master** | the ONLY tensor-capable Vulkan build |
 | `llama.cpp-next` | ece963f41 (master) | 2026-08-15 | 136 commits behind current master |
@@ -41,6 +41,7 @@ ROCm tensor, **Q6_K**, ts **58/42**, f16 KV, MTP n3, c=192512,
 ## Findings (status: [measured] [online-verified] [candidate - untested])
 
 ### F1. [measured, local] The running profile is the prefill variant, not the decode variant
+
 The live server is `preset-38-27b-q8-vulkan-tensor-decode-200k.sh`, whose own
 header says: "WHEN TO PICK THIS OVER THE ROCm TENSOR PROFILE: prefill-dominated
 work... For interactive/agent use, ROCm still wins". Measured decode 40.3 t/s
@@ -49,10 +50,12 @@ switching the daily profile to the ROCm Q6_K 58/42 one.** Tradeoffs: -27k
 context (216k -> 192k), Q6_K vs Q8_0 quality, prefill drops 565 -> ~415 t/s.
 User approval needed before switching anything.
 
-### F2. [online-verified] Rebuild `llama.cpp-vulkan-tp` on current master.
+### F2. [online-verified] Rebuild `llama.cpp-vulkan-tp` on current master
+
 PR #25051 head 13ac90156 is still the PR tip (no new commits since 2026-08-16),
 but its BASE is ~766 commits behind master b21e4de74 (2026-08-22). Merged since
 its base that touch the tensor decode path:
+
 - **#24710** (merged 2026-07-10): "make tensor-split regex patterns static to
   avoid per-token recompilation". Author profiled `-sm tensor` on consumer
   PCIe GPUs: **~30% of the decode thread in std::regex compilation** under
@@ -67,11 +70,13 @@ draft and unmerged; rebase may need conflict work (commits touch
 ggml-backend-meta.cpp which changed in #26502/#27433 merge+revert).
 
 ### F3. [online-verified, CORRECTED 2026-08-22] ROCm build: #26696 REMOVED -funsafe-math-optimizations (no opt-in exists)
+
 (Earlier draft wrongly said #26696 added a GGML_HIP_UNSAFE_MATH CMake flag - the
 PR body described that, but the merged commit e79e4bf66 (2026-08-13) ONLY
 deletes the 3-line flag block from ggml/src/ggml-hip/CMakeLists.txt.
 `git grep GGML_HIP_UNSAFE_MATH origin/master` = empty. Verified directly.)
 Consequences:
+
 - The pinned ROCm build (030ebb558, 2026-08-10) was compiled WITH
   -funsafe-math-optimizations (hardcoded pre-#26696). Every ROCm build from
   2026-08-13 onwards loses it -> the measured b10450 -4.8% pp / -4.0% tg
@@ -88,7 +93,9 @@ Consequences:
   observed divergence, so the cost is accepted in practice.
 - The PR body also promised a gfx1151 CI byte-identity check; it did NOT land
   in master (not in .github/). No CI guard exists for this.
+
 ### F4. [candidate] Open PRs that touch MTP decode (not merged, cherry-pick candidates)
+
 - **#27210** "spec: add adaptive MTP draft depth (draft-mtp-adaptive)" - open,
   updated 2026-08-22. Mainline already has `--adaptive-target` (off in prod).
   Their README: adaptive can vary effective depth per step within the n_max
@@ -104,6 +111,7 @@ Consequences:
   layer per step over host memory).
 
 ### F5. [candidate] n_max > 8 under tensor is currently blocked by an upstream bug
+
 Documented locally: `-sm tensor --spec-draft-n-max 10/12/16` hits
 `ggml-backend-meta.cpp:1576 GGML_ASSERT(meta_buf_ctx->bufs[i])`. #24549 (open)
 and #24566 (open draft) target the same component. If either lands, the n_max
@@ -112,6 +120,7 @@ on layer split (-6 to -12%), so value here is uncertain. Re-test only if the
 fix merges and a quick matrix is cheap.
 
 ### F6. [tested, null/rejected - do not re-recommend]
+
 ~45 knobs, all measured locally: all GGML_VK_* envs, all GGML_CUDA_* AR envs,
 RCCL (segfault), -t 1..32, -ub 64..2048, q8_0 KV for speed, PCIe ASPM
 performance, n16 p0.8 / n8 p0.8 p_min (negative on this model), n_max 4 on
@@ -119,16 +128,19 @@ dense-27B Vulkan, b10450 without unsafe-math. See
 docs/active/AMD_DUAL_GPU_TUNING.md for the full null table.
 
 ### F7. [candidate, system] Mesa 26.0.3 is an Ubuntu package; check upstream Mesa
+
 26.1/27 for RADV RDNA3/RDNA4 decode fixes (flash attention, coopmat2, pipeline
 capture). A driver upgrade is the only lever on the Vulkan path left after
 F2. Needs user OK (system package upgrade).
 
 ### F8. [candidate, system] Kernel 7.0.0-30 in-tree amdgpu: check for RDNA3
+
 GTT/spill and HMM fixes; also check if `amdgpu.gart_size` / `vramlimit` or
 `cgroup` pinning changes the XTX ceiling behavior. Low priority: the ceiling is
 a design constraint (desktop on XTX), not a driver bug.
 
 ### F9. [measured, local analysis] `llama.cpp-next` (ece963f41, 2026-08-15) sits BETWEEN pin and master
+
 It is 92 commits over the pinned 030ebb558 and 136 under current master b21e4de74.
 Critically it CONTAINS `e79e4bf66 ggml-hip: remove -funsafe-math-optimizations
 (#26696)` - i.e. the next-line build is the SLOW one (same -4.8%/-4.0% regression
@@ -140,7 +152,8 @@ re-design, #27041 metrics during decode, #27005 auto-detect MTP draft type,
 #26623 ggml_ssm_scan recurrent-state rollback. All ride along for free with an
 F3 master rebuild.
 
-### F10. [online-verified] Upstream docs/multi-gpu.md (as of pin) confirms:
+### F10. [online-verified] Upstream docs/multi-gpu.md (as of pin) confirms
+
 - tensor mode REQUIRES flash-attn (running server has --flash-attn on: good).
 - tensor + quantized KV cache is officially "not implemented" - the Vulkan TP
   build accepting q8_0 KV under tensor is running undocumented behavior; keep f16.
@@ -150,11 +163,13 @@ F3 master rebuild.
   prefill workhorse on this box (interconnect-bound tensor prefill).
 
 ### F11. [candidate, untested] PCIe link-width verification (read-only)
+
 The docs assume the R9700 runs at Gen4 x4 via chipset. If it ever negotiated
 lower (x2/x1 or Gen3) tensor decode drops with it. `lspci -vvv` LnkSta check is
 untried on this box and costs nothing.
 
 ### F12. [candidate, untested] CPU thread placement for the decode loop
+
 `-t 1..32` was swept (null) but CPU AFFINITY was never tested. The 9950X3D has
 one 8-core X3D CCD; the meta-backend decode thread (allreduce staging via
 pinned host memory) is a single-thread hot loop. taskset'ing the llama-server
@@ -162,13 +177,14 @@ process onto the X3D CCD is untried. Cheap, reversible, no GPU restart needed
 for a quick A/B on the next normal restart.
 
 ### F13. [measured, local sysfs 2026-08-2x] PCIe TRUTH differs from the docs, twice
+
 Negotiated link state per hop (sysfs current_link_speed/width, stable across 3 samples):
 
 R9700 path (lspci -t): IOD -> [02:02.1 internal] -> 05:00.0 (1022:43f4 chipset) ->
 0c:08.0 (1022:43f5 chipset) -> 12:00.0 (1002:1478) -> 13:00.0 (1002:1479) -> 14:00.0 (R9700)
 
 | hop | id | negotiated |
-|---|---|---|
+| --- | --- | --- |
 | 05:00.0 | 1022:43f4 | 16.0 GT/s x4 (Gen4 x4) |
 | 0c:08.0 | 1022:43f5 | 16.0 GT/s x4 |
 | 12:00.0 | 1002:1478 | 16.0 GT/s x4 |
@@ -184,6 +200,7 @@ pp_dpm both GPUs: power_dpm_state=performance. R9700 sclk 2019/2350 MHz, XTX
 1501/2482 MHz at idle. No AER error counters readable without root.
 
 Implications:
+
 - Tensor DECODE (10 KB activations/layer): unaffected at 15.75 GB/s. The
   "sync-bound not bandwidth-bound" conclusion stands.
 - Tensor PREFILL (10.5 MB allreduce chunks): ceiling is 2x higher than the
@@ -197,6 +214,7 @@ Implications:
 - A3 (link-width check) is DONE - removed from queue.
 
 ### F14. [online-verified] PR #25051 thread mining (48 comments + 10 reviews, full dump in research/raw-pr25051-comments.md)
+
 - The PR is STALLED: author pwilkin last active 2026-08-16 ("once I'm back from
   vacation I'll revisit"). Users (2026-07-27, 2026-08-16) are asking for progress;
   leapdragon: "it's down to running quite old builds at this point or just
@@ -233,6 +251,7 @@ Implications:
   backend sampling is unavailable under tensor (see F15).
 
 ### F15. [measured, local log] MTP draft model uses a CPU sampler under -sm tensor (both backends)
+
 Current server log, model load:
   `common_speculative_impl_draft_mtp: - n_max=3, n_min=0, p_min=0.00, backend_sampling=1`
   `set_sampler: backend sampling not supported with SPLIT_MODE_TENSOR; using CPU`
@@ -251,13 +270,14 @@ a GPU-sampler patch under tensor would be original work, not a cherry-pick.
 The rebase (A1) still unlocks the #24710 regex fix and ~228 other commits.
 
 ### F16. [online-verified] PR #27210 adaptive MTP: tested on the SAME model class, big code win
+
 PR #27210 (`--spec-type draft-mtp-adaptive --spec-draft-n-max 12`) was benchmarked by
 its author on **Qwen3.8-27B Q8_0, 2x AI PRO R9700 (gfx1201), ROCm** - same model,
 same GPU class as the R9700 half of this box. temp 0.6 / top-k 20 / top-p 0.95
 (matches the shipped profiles), ctx 8192, 2 seeds:
 
 | config | coding | prose | hard prose |
-|---|---:|---:|---:|
+| --- | ---: | ---: | ---: |
 | fixed n2 | 67.2 | 53.3 | 51.2 |
 | fixed n3 | 78.8 | **56.4** | **52.6** |
 | **adaptive n12 (floor 2)** | **86.4 (+9.6%)** | 54.4 | 51.0 |
@@ -274,9 +294,11 @@ Caveats: tested at ctx 8192 (verify cost is depth-dependent; re-test at depth),
 (unmerged, AI-assisted disclosure - review the state machine before trusting).
 
 ### F17. [online-verified] Discussion #21043 (RDNA4 R9700 experiments, 47 comments; full dump in research/raw-disc-21043.md)
+
 OP = 50+ experiments on a single slotted R9700 (Gen5 x16 slot), Mesa 25.2.8, b8554.
 
 New-for-this-box levers (NOT in the local ~45-knob null table):
+
 - **`rm_kq=1` source patch** (one line in ggml-vulkan.cpp: `uint32_t rm_kq = 1; // was 2`,
   reduces VGPR pressure on RDNA4): +0.8-1.1% RADV dense-27B decode, +13% on AMDVLK
   dense. PPL/VRAM identical. Fold into the A1/A2 rebuilds; test with the matrix.
@@ -316,6 +338,7 @@ New-for-this-box levers (NOT in the local ~45-knob null table):
   Mesa's big wins (+21/+48%) are PREFILL. A4 re-scoped accordingly.
 
 ### F18. [measured, local] Clocks under load are fine; iowait is Docker, not the LLM
+
 R9700 during the live server run: sclk 3254 MHz, mclk 1258 MHz (level 5/5, max).
 No clock-boost headroom to chase. XTX sclk table top 2482.
 System iowait was ~34% at 15:37 - traced to Docker Desktop's qemu VM
@@ -326,8 +349,10 @@ sampler (F15) + CPU-proxy allreduce staging; reinforces A1.
 ASPM policy = default (not performance); local test already null; excluded.
 
 ### F19. [online-verified] Mesa 26.0 -> 26.2 RADV delta (766 radv commits; title scan)
+
 Almost all GFX12 graphics-path changes (HiZ, VRS, RT, video). Two commits matter
 for this box's compute/multi-GPU path:
+
 - `937bd7e0` (2026-05-15) **radv: clear the follower gang semaphore when a cmdbuf
   is reset** - "follower gang" is RADV's multi-device construct; the closest
   upstream match to the driver bug behind PR #25051's decode-crawl workaround.
@@ -340,6 +365,7 @@ to 26.1/26.2 + A/B decode matrix + prefill check. Expected: low decode, maybe
 prefill, correctness watch on the tensor path.
 
 ### F20. [online-verified] ROCm: Ubuntu 26.04 ships only 7.1.0; newer needs AMD's repo
+
 Installed: libamdhip64 7.1.0-0ubuntu2 (ROCm 7.1). Upstream: 7.2.0..7.2.4
 (2026-01..05) and a 7.14.0 tag (2026-07). A #21043 commenter on ROCm 7.2.1
 (kernel 7.0.0-15, same kernel family) reported ROCm "actually better" than Vulkan
@@ -348,7 +374,9 @@ Upgrading to 7.2.x = AMD repo + kernel/driver coupling risk (A9 stays
 high-effort; only after the build-side items pay off).
 
 ### F21. [measured, local] Trial rebase of PR #25051 onto current master: ZERO conflicts
+
 Done in a scratch worktree (now durable: ~/Desktop/local_llm/llama.cpp-tp-trial, detached; real tree untouched).
+
 - Merge base: 3fc4e1052 (#20793). 14 PR commits applied cleanly onto
   origin/master (b21e4de74, 2026-08-22) with no textual conflicts.
 - Exact PR footprint on the new tree: **4 files, +938/-4**:
@@ -394,6 +422,7 @@ Done in a scratch worktree (now durable: ~/Desktop/local_llm/llama.cpp-tp-trial,
   the new tree if desired.
 
 ### F22. [online-verified] Vulkan+MTP self-spec crash class after kernel bumps (watch item, not an action)
+
 #27460 (2026-08-20): Qwen3.8-27B draft-mtp (shared-layer self-spec - our exact
 mode) crashes on Vulkan/RADV gfx1201 after Linux kernel 7.1.3 -> 7.1.7; same
 class as #24492 ("pre-allocated tensor cannot run operation NONE"). Clean
@@ -405,6 +434,7 @@ kernel/Mesa update, suspect the KMD first; the ROCm profile does not use Vulkan
 and is the fallback. Keep this in mind for A4 (Mesa upgrade).
 
 ### F23. [online-verified] MTP costs ~100% of prefill under multi-GPU LAYER split (bug); tensor cost untested
+
 #27428 (2026-08-21, build 10499): Qwen3.8-27B Q6/Q3 + draft-mtp, RTX 4090
 laptop + RX 7900 XTX layer split: pp drops ~1000 -> ~500 t/s with MTP on
 (single GPU: only ~3%). Setting the draft-MTP device to one GPU recovers only 8%.
@@ -418,6 +448,7 @@ real pp win for cold-read work.
 ## Findings F24-F28 (2026-08-22, post-bench IRL analysis)
 
 ### F28 - #24710 (per-call regex compilation in meta split-state) patched into the live tree
+
 The running tree (llama.cpp-tp-adaptive @13ac90156 + #27210 port) still contained
 the pre-#24710 code: `llama_meta_device_get_split_state` compiled 29 std::regex
 patterns on EVERY call, and ggml-backend-meta calls that for every tensor op in
@@ -432,8 +463,8 @@ is GPU-bound ~30ms) but it is free CPU and removes a known waste. No server
 touching; no tree git state modified (working-tree patch only, tree is mid-
 resolution of the #27210 port).
 
-
 ### F24 - Adaptive MTP gain is a CONTENT-REGIME effect; IRL it sits at the floor
+
 IRL server (preset 6, merged-tp-adaptive, tensor 49/51, c=262144) log, task 1076
 (13k tokens, ~49k live ctx): draft acceptance 0.442, mean acceptance length 2.37,
 per-position (marginal) = (0.641, 0.420, 0.277, 0.024, 0.004, 0.001, 0...).
@@ -452,6 +483,7 @@ cannot be the main driver of the 4x gap vs PR #27210's +9.6%: if it were, IRL
 n12 would beat IRL n3, and it does not.
 
 ### F25 - The novel +103% (35.90 -> 72.85) is arithmetically impossible as a
+
 controller effect => contaminated
 At any plausible per-round cost ratio T12/T3 in [1.1, 1.6], reaching 2.03x
 throughput on novel requires marginal acceptance p4..p12 ≈ 0.18-0.30/position -
@@ -465,6 +497,7 @@ text mismatch, not a controller gain. Re-test only with per-run acceptance
 counters (now in the log): if adaptive-novel p4..p12 ≈ 0, discard.
 
 ### F26 - "backend sampling not supported with SPLIT_MODE_TENSOR" costs ~1.5-2%
+
 src/llama-context.cpp:1196 (set_sampler): tensor split erases the backend sampler
 unconditionally; logits (~150k vocab x batch<=13 f32, up to ~8 MB) are copied to
 CPU and the chain (temp 1.0/top-p 0.95/top-k 20 IRL) runs there, ~1-1.5 ms per
@@ -475,6 +508,7 @@ layer profile. The MTP draft's own sampler also falls back to CPU ("backend
 offload failed ... using CPU sampler", 24 log lines). Not where the headroom is.
 
 ### F27 - Client request storm + oversized grammars + fast log rotation
+
 In an 18-min window the server's task counter reached ~107,732 while only ~1,100
 tasks generated tokens: a client is POSTing empty-messages chat requests at
 ~1000/s ("Jinja Exception: No messages provided"), 22 requests failed with
@@ -486,10 +520,11 @@ out of reach. Fix: find and stop the retry-loop client; it is CPU/slot-lock
 contamination under any benchmark.
 
 ## ACTION QUEUE (strictly untested-on-this-box items; cross-checked against
+
 the ~45-knob null table in AMD_DUAL_GPU_TUNING.md)
 
 | # | Action | Why untested | Value est. | Effort | Status |
-|---|--------|--------------|-----------|--------|--------|
+| --- | -------- | -------------- | ----------- | -------- | -------- |
 | A1 | Rebase #25051's 14 commits onto master b21e4de74, rebuild Vulkan TP, re-run decode matrix (-r3, MTP off) + 1 live MTP sample. PR is stalled (author vacated 2026-08-16) so a local rebase is the only path to the fixes | Base is 766 commits stale; #24710 (30% of decode thread in regex, merged 2026-07-10) + #24814 are missing from the RUNNING build; #24720 (vulkan graph reuse, +25% claim on Intel) stays a separate cherry-pick eval | med-high | med (rebase conflicts in ggml-backend-meta.cpp possible; #26502 merged+reverted in that window) | not started |
 | A2 | ROCm upgrade path: pinned build already HAS unsafe-math (pre-#26696); A2 only matters when rebuilding ROCm at a newer commit - then re-add the one-line `-funsafe-math-optimizations` to ggml/src/ggml-hip/CMakeLists.txt (F3, no CMake flag exists). Re-run the pp/tg matrix + temp-0 MTP identity check. | - | med (at upgrade) | low | queued (at next ROCm rebuild) |
 | A3a | ~~link-width check~~ **DONE -> F13.** R9700 = Gen4 x4 chain (15.75 GB/s; docs said 7.9), final segment Gen5 x16; XTX Gen4 x16 (docs said 5.0) | - | - | - | closed |
@@ -515,15 +550,45 @@ Use the CURRENT tree's binary (~/Desktop/local_llm/llama.cpp-tp-adaptive/build/b
 | A16 | **Adaptive-vs-n3 clean A/B on real content** (decides the true IRL value of adaptive; F24 says ≈0, unproven): next restart, same preset 6 flags with `--spec-draft-n-max 3` (floor still 3) for one session, then compare IRL tg + per-position acceptance vs the current adaptive logs (F24 baseline: 31.56 t/s @49k, mean len 2.37) | F24 shows bench +43% is content-regime; IRL n3 baseline missing | high | low (restart window) | queued (next restart) |
 | A17 | **Find and stop the empty-messages client storm** (F27: ~1000 req/s, task counter 107k/18min, 22 oversized-grammar rejects, log rotates ~4min). Check llama_server clients/harness for a retry loop POSTing empty chat bodies; the churn contaminates benches and destroys log evidence | F27 | high (bench validity) | trivial once found | queued (user) |
 | A18 | **Bench method fix**: relabel 81.67 as "repetitive-content regime"; add a realistic agentic cell (diverse tool calls, not the same call x50) and record per-run acceptance counters in the CSV (they are in the server log already) | F24/F25 | med | trivial | queued |
+| A19 | **2026-08-23 deep-research mechanisms M1-M20** (full list + sources + tests in docs/active/2026-08-23-FIVE-AREAS-RESEARCH.md, "Deep research pass" section). Top items: **M1** port #27173 (chained MTP draft + meta output mirror + sched pool; +12.8% on this exact model/tensor/Q8_0; AI-disclosed, review state machine first); **M2** DFlash2 sidecar (`z-lab/Qwen3.8-27B-DFlash2` exists; port #27342+#26636; LAYER profile first); **M3** `--spec-draft-type-k/v f16` A/B (one flag, acceptance counters); **M4** adaptive n_max {8,16} A/B (kernel-shape cells, #27290 jagged curve); **M5** the 3 untested VK envs (DISABLE_FUSION/COOPMAT/MULTI_ADD); **M9** chunked GDN prefill kernel (structural, upstream-level); **M14** #24891 checkpoint-invalidation fix (IRL pp); **M15** iommu=pt (GRUB, user approval) | F29 | high | varies | queued (free-GPU windows + rebuilds) |
 
 NOT on the queue (tested null/negative locally - kept out deliberately):
-GGML_VK_* envs (whole list), GGML_CUDA AR envs (whole list), RCCL, -t, -ub,
-batch on Vulkan, q8_0 KV for speed, PCIe ASPM, p_min/n8/n16, n_max 4 dense-VK,
-main-gpu 0 on Qwen3.8, GGML_VK_COMM_RING (already default in the PR build),
---cache-reuse (inert on hybrids), Nemotron q8_0 (model deleted).
+GGML_VK_* envs except M5/M19 (DISABLE_FUSION, DISABLE_COOPMAT,
+DISABLE_MULTI_ADD, SUBALLOCATION_BLOCK_SIZE - the null table's "whole list"
+claim was incomplete per the 2026-08-23 getenv inventory), GGML_CUDA AR envs
+(whole list), RCCL, -t, -ub, batch on Vulkan, q8_0 KV for speed, PCIe ASPM,
+p_min/n8/n16 (as p_min tests), n_max 4 dense-VK, main-gpu 0 on Qwen3.8,
+GGML_VK_COMM_RING (already default in the PR build), --cache-reuse (inert on
+hybrids), Nemotron q8_0 (model deleted), ngram-mod (F-measured + #27290-era
+anecdote), #26079/#27140 (third-party A/B negative on this model, F29),
+CUBLAS_COMPUTE envs (cannot touch K-quant paths by code read, F29), DSpark
+(#27290 independent loss), iMatrix/NVFP4 model swap (quality gate, F29).
+
+F29 (2026-08-23, deep research, no GPU work): 20 untried mechanisms catalogued
+with sources/test plans in the same-dated research doc (M1-M20). Headline
+finds: (1) open PR #27173 measured +12.8% on Qwen3.8-27B Q8_0 2x5090 tensor
+
+- same model/quant/split as us - via chained draft + per-GPU lm-head mirror
+(the last is directly anti-our-no-P2P-topology); (2) `z-lab/Qwen3.8-27B-
+DFlash2` draft checkpoint exists for llama.cpp (open PR #27342); (3) the
+#27290 pinned-PR A/B independently rejected #26079/#27140 on this model and
+kept #25635 (FA swizzle, +7.4% pp) / #26705 (Q4/5_K mmvq) - both cherry-
+pickable into the pinned ROCm build; (4) Qwen3.8-27B is 48/65 recurrent
+GDN layers and every local build runs the token-sequential GDN kernel
+("
+TODO: chunked kernel" in-tree) - #26001's chunked GDN is NVIDIA-gated; the
+structural prefill lever is upstream; (5) Mesa 26.1/26.2 RADV notes contain
+zero compute-perf commits - the upgrade is stability-only (2 multi-queue/
+flush fixes touch our path); (6) MTP draft graph = single nextn block
+(verified in code, F23's 100%-of-prefill under tensor split is the draft
+context mirroring the full layer stack under -sm tensor, not 65x draft
+compute); (7) the local null table's "GGML_VK_* whole list" claim was wrong -
+4 VK envs were never tested (M5/M19).
 
 ## STALE NEXT ACTIONS (superseded by the ACTION QUEUE above)
+
 ## NEXT ACTIONS (self-prompt queue - work through top-down, then requeue)
+
 1. Mine discussion #21043 (RDNA4 R9700 experiments) comments end-to-end. [assigned: child driver-system]
 2. Mine PR #25051 full comment thread (48 comments) for maintainer guidance + perf notes. [assigned: child llamacpp-deep-dive]
 3. Check Mesa upstream releases 26.1+ for RADV perf/decode fixes; check Ubuntu update path. [assigned: child driver-system]
@@ -536,6 +601,7 @@ main-gpu 0 on Qwen3.8, GGML_VK_COMM_RING (already default in the PR build),
 10. CPU-side: verify -t 16 vs 32 at batch-1 (they swept, but on tensor+MTP?), check llama-server thread placement (taskset decode thread to X3D cores). [main]
 
 ## Safety rules (user away)
+
 - Do NOT stop/restart the running server, do NOT kill the GPUs, do NOT modify
   profiles. Local work is read-only investigation + report writing.
 - Benchmarks that need a free GPU go in the report as actions for when the user
