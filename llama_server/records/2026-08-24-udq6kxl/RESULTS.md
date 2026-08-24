@@ -80,3 +80,50 @@ are no per-layer bit-width decisions for a better imatrix to inform. The
 `~/.hermes/config.yaml` -> `context_length: 252144` (server context - 10,000).
 Already pointed at `http://localhost:1234/v1`, `default: local`, matching the
 server's `--alias local`. Gateway active on :8642.
+
+---
+
+## Head-to-head: Q8_0 vs UD-Q6_K_XL (added after the fact)
+
+The quant swap was originally shipped on the ASSUMPTION that a smaller file is
+faster on a bandwidth-bound workload. That was never measured. It is now --
+same build, same flags, llama-bench (no speculation), pp and tg at two depths.
+
+At matched ratio 49/51, ub1024/b2048:
+
+| metric | Q8_0 | UD-Q6_K_XL | delta |
+|---|---|---|---|
+| tg @d0    | 19.40 | 20.76 | **+7.0%** |
+| tg @d65k  | 17.68 | 18.66 | **+5.5%** |
+| pp @d0    | 392.92 | 385.74 | -1.8% |
+| pp @d65k  | 321.68 | 316.30 | -1.7% |
+
+At 50/50 the same pattern holds (tg +6.5%/+5.5%, pp -1.4%/-1.6%).
+
+**Verdict: the swap is justified.** ~+6% decode for ~-1.6% prefill, plus 2.9 GiB
+of VRAM at matched settings (16,748 vs 19,608), which is what makes full 262144
+context possible at all.
+
+Best per model at d65k:
+
+| config | tg | pp |
+|---|---|---|
+| UD-Q6 52/48 | 19.95 | 310.35 |
+| **UD-Q6 50/50** | **19.70** | **321.19** |
+| Q8_0 50/50 | 18.67 | 326.49 |
+| Q8_0 49/51 | 17.68 | 321.68 |
+
+52/48 is +1.3% tg but **-3.4% pp** at depth AND only 7 MiB of production VRAM
+margin. 50/50 is the balanced, safe optimum.
+
+## Batch/ubatch does NOT transfer to tensor split
+
+The +33% d0 / +63% d65k prefill win from `--ubatch-size 512 --batch-size 8192`
+is row/layer ONLY. Under tensor split it is NEGATIVE:
+
+| config | pp @d65k | tg |
+|---|---|---|
+| UD-Q6 50/50 ub512/b8192 | -2.1% | -0.2% |
+| Q8_0 49/51 ub512/b8192  | -2.6% | +0.3% |
+
+Tensor split keeps ub1024 / b2048.
