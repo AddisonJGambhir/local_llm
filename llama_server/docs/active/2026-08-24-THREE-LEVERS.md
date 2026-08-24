@@ -357,7 +357,8 @@ free-GPU window:
 
 (adjust the op-arg syntax to the build's test-backend-ops; the point is the
 isolated per-token time of the AR kernel and its effective GB/s, per the
-# 24561 table format). Then compute the GDN fraction of prefill:
+
+# 24561 table format). Then compute the GDN fraction of prefill
 
     GDN_fraction ~ 48_layers x (us per token, isolated) x n_tokens
                    / (measured pp time for the same n_tokens)
