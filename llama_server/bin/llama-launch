@@ -210,10 +210,13 @@ case "$BACKEND_CHOICE" in
             echo "    8) decode  — MTP n3 — f16  — 144k  ( 718 pp / 28.37 tg unspec, full-precision KV) [T 68,32 · vis]"
             echo "    9) context — MTP n3 — f16  — 256k  ( 889 pp / 23.17 tg unspec, full context) [T 50,50 · vis]"
             echo
-            echo "  Muse Glimmer 30B  Q8_0"
-            echo "   10) 128k     — DFlash n2 — f16        ( 743 pp /  31.7 tg; prefer ROCm) [L 1,1 · txt]"
+            echo "  Qwen 3.8 27B dense  UD-Q6_K_XL (unsloth Dynamic v3.0) — tensor split [PR #25051]"
+            echo "   10) TENSOR   — MTP n3 — f16 — 256k FULL  (19.62 tg raw @65k, +5.3% vs 49/51) [T 50,50 · vis] ★NEW"
             echo
-            PRESET_CHOICE="$(prompt_choice "Preset (1/2/3/4/5/6/7/8/9/10): ")"
+            echo "  Muse Glimmer 30B  Q8_0"
+            echo "   11) 128k     — DFlash n2 — f16        ( 743 pp /  31.7 tg; prefer ROCm) [L 1,1 · txt]"
+            echo
+            PRESET_CHOICE="$(prompt_choice "Preset (1/2/3/4/5/6/7/8/9/10/11): ")"
             case "$PRESET_CHOICE" in
                 1) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-vulkan-dual-q8-256k-mmproj.sh" ;;
                 2) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-vulkan-dual-256k-textonly.sh" ;;
@@ -224,7 +227,8 @@ case "$BACKEND_CHOICE" in
                 7) PRESET_PROFILE="$P/preset-38-27b-q6k-vulkan-tensor-decode-192k.sh" ;;
                 8) PRESET_PROFILE="$P/preset-38-27b-q6k-vulkan-tensor-decode-f16-144k.sh" ;;
                 9) PRESET_PROFILE="$P/preset-38-27b-q6k-vulkan-tensor-256k.sh" ;;
-                10) PRESET_PROFILE="$P/preset-muse-glimmer-30b-q8-vulkan-dual-128k-dflash.sh" ;;
+                10) PRESET_PROFILE="$P/preset-38-27b-udq6kxl-vulkan-tensor-f16-256k.sh" ;;
+                11) PRESET_PROFILE="$P/preset-muse-glimmer-30b-q8-vulkan-dual-128k-dflash.sh" ;;
                 *) echo "Invalid preset selection." >&2; exit 2 ;;
             esac
         fi
