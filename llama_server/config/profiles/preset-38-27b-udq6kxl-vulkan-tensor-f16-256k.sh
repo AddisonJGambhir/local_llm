@@ -1,3 +1,13 @@
+# ===== FACTS (generated: do not hand-edit) =====
+# MODEL    Qwen3.8-27B-UD-Q6_K_XL.gguf
+# BUILD    llama.cpp-tp-adaptive   backend Vulkan0,Vulkan1
+# SPLIT    tensor 50,50   (XTX,R9700)   main-gpu 1   ubatch 1024
+# CONTEXT  262144   KV f16
+# SPEC     draft-mtp  n_max 3
+# VISION   yes (tower on Vulkan1)
+# VRAM     XTX ceiling 24200 MiB - see MEASURED below for this profile's peak
+# MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)
+# ===== END FACTS =====
 # ============================================================================
 # UD-Q6_K_XL + Vulkan TENSOR SPLIT, f16 KV, full 262144 context -- 2026-08-24
 # ============================================================================
