@@ -15,7 +15,7 @@ Status per item:
 | --- | --- | --- | --- |
 | A17 client storm | **Misdiagnosis. Close.** | none (it was never a client) | done today |
 | L2 env one-liners | Valid, small | 0-3% aggregate, mostly null-closure | one restart window + bench cells |
-| M9 chunked GDN | Valid, the one structural pp lever | +2-6% E2E pp, d0-favored | Step-0 gate (~30 min), then 1-2 wk port if it passes |
+| M9 chunked GDN | Fused multi-token path: present + enabled. True chunked scan: **absent** (see amendment below) | unknown until Step-0 | Step-0 gate (~30 min); if it passes, 1-2 wk chunked-scan kernel |
 
 ---
 
@@ -485,13 +485,65 @@ The Step-0 isolated benchmark is still the right way to size it.
 
 ## Minor
 
-- GDN layer split is **49 GDN / 16 attention**, not 48/17
-  (block_count 65, full_attention_interval 4 -> 65//4 = 16).
+- GDN layer split is **49 GDN / 16 attention**, not 48/17: full attention at
+  `i % 4 == 3` (blk.3, 7, 11, ..., 63), verified from the GGUF tensors
+  themselves (`blk.{i}.ssm_conv1d` present iff `i % 4 != 3`), not just the
+  `full_attention_interval` scalar.
 
 ## Revised priority
 
 1. Log-hygiene fix — still the top item. Both F27 and this doc drew wrong
    conclusions from the shared log.
 2. L2 env one-liners — unchanged, valid, ~2-3 h of mostly null-closure.
-3. M9 — descoped to shader occupancy tuning; gate on the Step-0 benchmark.
+3. M9 — Step-0 gate decides whether the real chunked-scan kernel (1-2 wk)
+   is worth it; see amendment below.
 4. A17 — closed.
+
+## M9 amendment (2026-08-24, second pass): "chunked" is a fusion flag, not a scan algorithm
+
+The refutation above is right about the narrow claim and wrong about the
+framing. Code evidence, all in llama.cpp-tp-adaptive (the running build):
+
+1. **One op, one name switch.** `src/models/delta-net-base.cpp:567-572`:
+   `build_recurrent_attn` builds a **single** `ggml_gated_delta_net(q,k,v,g,b,s,K)`
+   over the whole ubatch; `FGDN_CH` vs `FGDN_AR` is only the tensor *name*
+   (`n_seq_tokens > 1` vs `== 1`), consumed solely by the capability check.
+2. **The "chunked" check is device placement, not an algorithm.**
+   `llama-context.cpp:519-598`, inside `sched_reserve()` (line 439 — matches
+   the `-lv 5` runtime prefix): reserves a `16*n_seqs`-token graph and
+   verifies each GDN node lands on the same device as its layer.
+   "fused Gated Delta Net (chunked) enabled" therefore means *multi-token GDN
+   ops are fused and GPU-resident*. It says nothing about how tokens are
+   processed inside the kernel.
+3. **The kernel has no token parallelism.** `gated_delta_net.comp:121`:
+   `for (uint t = 0; t < n_tokens; t++)` is a dependent loop over *all* tokens
+   of the op; the push constants carry no chunk parameter. `ggml_vk_gated_delta_net`
+   (`ggml-vulkan.cpp:11909-11978`) dispatches one launch with grid
+   `{H, n_seqs, S_v}` — no token/chunk dimension. There is exactly one GDN
+   shader in the Vulkan backend.
+
+So the FLA-style chunked scan (parallel within-chunk, serial between chunks,
+WY representation — the algorithm in CUDA #24561 and in vLLM/SGLang GDN
+prefill kernels) is **not implemented** in this build. The prefill critical
+path per GDN layer is still a dependent scan over the full ubatch: up to
+2048 sequential state-update iterations in the production ub/batch regime.
+
+Consequences:
+
+- The verification pass's "descoped to shader occupancy tuning" is the wrong
+  frame: the kernel already runs H x S_v workgroups per sequence per layer
+  (thousands — occupancy is not the limit), and no workgroup-count or loop
+  tuning can shorten a 2048-step dependent chain. The only structural lever
+  is fewer sequential steps, i.e. the real chunked algorithm.
+- What **was** refuted: "the fused multi-token path is absent and needs a
+  port." It is present and enabled (the original doc's grep was a false
+  negative: it covered `ggml/src` only, while the check lives in
+  `src/llama-context.cpp`; the binary strings live in `libllama.so`, not the
+  18 KB launcher).
+- The remaining work is a *new* kernel + graph change: chunk the ubatch in
+  the graph, compute within-chunk contributions in parallel, serial scan
+  between chunks. Still 1-2 weeks of kernel work — correctly named.
+- The Step-0 gate is unchanged and is now the only decision that matters:
+  isolated GDN fraction of pp time < ~5% -> drop the whole item (occupancy
+  tuning included); >= ~5% -> the chunked scan is the single architectural
+  pp lever on this box.
