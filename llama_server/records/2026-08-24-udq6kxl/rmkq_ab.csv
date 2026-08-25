@@ -1,0 +1,8 @@
+build,rm_kq,depth,metric,ts,sd,peak_xtx
+baseline_kq2,2,0,tg,21.640,0.111,14676
+patched_kq1,1,0,tg,21.220,0.059,14493
+baseline_kq2,2,0,tg,21.704,0.087,14744
+patched_kq1,1,0,tg,21.395,0.051,15034
+baseline_kq2,2,65536,tg,19.637,0.063,17978
+patched_kq1,1,65536,tg,19.450,0.075,18320
+baseline_kq2,2,65536,tg,19.758,0.069,18507

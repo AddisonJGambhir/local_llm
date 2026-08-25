@@ -127,3 +127,44 @@ is row/layer ONLY. Under tensor split it is NEGATIVE:
 | Q8_0 49/51 ub512/b8192  | -2.6% | +0.3% |
 
 Tensor split keeps ub1024 / b2048.
+
+---
+
+## rm_kq 2 -> 1: TESTED, NEGATIVE (2026-08-24)
+
+The 2026-08-23 Area-5 note concluded rm_kq was a no-op because the served model
+was Q8_0 (which uses `rm_stdq`, not `rm_kq`). That conclusion went stale when the
+production model became UD-Q6_K_XL. Measured tensor-type split of the running
+model:
+
+| quant | bytes | share | rm_kq applies |
+|---|---|---|---|
+| Q8_0 | 12.60 GiB | 53.5% | no (rm_stdq) |
+| Q6_K | 9.93 GiB | 42.2% | **yes** |
+| Q5_K | 1.00 GiB | 4.2% | **yes** |
+| Q4_K | 0.02 GiB | 0.1% | yes |
+
+**46.5% of per-token weight traffic now routes through the rm_kq pipelines**, and
+it is on the hot path (6.81 GiB FFN, 1.82 GiB attention). So the lever was
+genuinely live again -- the reactivation reasoning was correct.
+
+Built in a throwaway worktree (`llama.cpp-tp-rmkq`, one line at
+ggml-vulkan.cpp:4713), never touching the shipping binary. Raw decode only
+(llama-bench `-p 0 -n 512`, no speculation, so no acceptance confound), tensor
+50/50, arms interleaved baseline->patched->baseline->patched, `-r 5` per cell.
+
+| depth | rm_kq=2 | rm_kq=1 | delta | ranges overlap |
+|---|---|---|---|---|
+| d0 | **21.672** [21.640-21.704] | 21.307 [21.220-21.395] | **-1.68%** | no |
+| d65536 | **19.697** [19.637-19.758] | 19.450 | **-1.26%** | no |
+
+**Verdict: harmful, keep rm_kq = 2.** The reported +0.8-1.1% does not transfer.
+That evidence came from a single-GPU RDNA4 setup; here the XTX is RDNA3 and the
+R9700 is RDNA4 under tensor split, and rm_kq is one global value applied to both,
+so half the K-quant GEMV runs on the architecture the tuning was not measured on.
+
+Effect is smaller at depth (-1.26% vs -1.68%), consistent with more of the
+per-token cost at d65k being attention over the growing KV rather than weight
+GEMV -- i.e. less surface for a K-quant pipeline change to act on.
+
+Worktree `llama.cpp-tp-rmkq` / branch `tp-rmkq` can be deleted.
