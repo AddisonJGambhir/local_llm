@@ -168,3 +168,63 @@ per-token cost at d65k being attention over the growing KV rather than weight
 GEMV -- i.e. less surface for a K-quant pipeline change to act on.
 
 Worktree `llama.cpp-tp-rmkq` / branch `tp-rmkq` can be deleted.
+
+---
+
+## The tensor-prefill gap is a llama-bench artifact (2026-08-24)
+
+Records from 08-23 state that Vulkan tensor prefill is ~3.1x behind row on the
+same build (1238 vs 396 t/s at d0), and that a real pp win therefore requires
+either taking a split-mode tradeoff (row/layer, costing ~15% decode) or upstream
+Vulkan tensor work. **Both llama-bench figures reproduce, and both mislead.**
+
+Measured on the SAME build and model with a real 16,558-token prompt through the
+server's `/completion`, versus llama-bench on the same config:
+
+| method | tensor pp |
+|---|---|
+| llama-bench `-p 2048` | 393.4 |
+| llama-bench `-p 8192` | 392.9 |
+| **server, real 16,558-token prompt** | **759.5 / 771.0** |
+
+Nearly 2x. Whatever llama-bench measures for prefill under `-sm tensor`, it is not
+what the server does on a real prompt.
+
+Cross-checked against an independent implementation: Lemonade v11.7.0 (stock
+upstream llama.cpp b10375, no PR #25051) running **layer 28/37 with the
+ub512/b8192 prefill tuning that llama-bench said was worth +33%/+63%**:
+
+| config | pp | tg |
+|---|---|---|
+| ours: tensor 49/51, ub1024/b2048, our fork | **759.5 / 771.0** | 54.61 / 50.11 |
+| lemonade: layer 28/37, ub512/b8192, stock b10375 | 735-742 | 49.4-49.7 |
+
+Tensor is FASTER on prefill (+3.6%) and on decode (+7%) on real work. The
+split-mode tradeoff does not exist in the direction the records claimed.
+
+**Consequences:**
+1. Retract "tensor prefill is 3.1x behind row" as a real-world statement. It is
+   true of llama-bench and false of the server.
+2. Retract the recommendation to consider row/layer for prefill-heavy work.
+3. The ub512/b8192 prefill win (+33% d0 / +63% d65k) was ALSO measured with
+   llama-bench on row/layer. It has never been confirmed on the server, and this
+   result implies it may not transfer either. Re-measure before relying on it.
+4. Any future prefill claim must come from a server measurement on a real prompt,
+   not from llama-bench.
+
+## Lemonade v11.7.0 evaluation
+
+Works, and integrates cleanly, but is slower than the current setup:
+
+- Discovers existing local GGUFs via `extra_models_dir` in
+  `~/.cache/lemonade/config.json` -- no re-download of the 23.6 GiB model.
+- Honours arbitrary llama-server flags via `llamacpp.vulkan_args`.
+- Auto-detects the MTP head and adds `--spec-type draft-mtp` by itself.
+- Config is rewritten by the daemon on startup: edit `config.json` only while
+  `lemond` is STOPPED, otherwise the change is silently lost (same trap as
+  hermes' config.yaml).
+- Ships stock llama.cpp b10375 (Vulkan) / b10470 (rocm-stable). Newer than our
+  fork's 9834, but stock means NO PR #25051, so no Vulkan tensor split -- layer
+  is the best it can do, which costs ~7-10% decode.
+
+Verdict: a competent wrapper, not a faster engine. Keeping our fork.

@@ -93,7 +93,7 @@ LLAMA_EXTRA_ARGS=(
     --ctx-checkpoints 8
     --split-mode tensor
     --main-gpu 1
-    --tensor-split 50,50
+    --tensor-split 49,51
     --batch-size 2048
     --no-mmap
     --mmproj "$LLAMA_SERVER_ROOT/models/mmproj-BF16.gguf"
