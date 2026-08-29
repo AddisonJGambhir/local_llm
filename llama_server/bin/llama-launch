@@ -197,28 +197,28 @@ case "$BACKEND_CHOICE" in
             echo "Presets — Vulkan:"
             echo "  split ratios: [L n,n]=layer [T n,n]=tensor (XTX,R9700; 1,1=auto)  vis=mmproj  txt=text-only"
             echo
-            echo "  Qwen 3.6 35B-A3B MoE  Q8_0  (best decode)"
-            echo "    1) vision   — MTP n2 — f16 — 256k  (2072 pp /  93.7 tg) [L 18,22 · vis]"
-            echo "    2) text     — MTP n2 — f16 — 256k  (2129 pp /  94.0 tg) [L 18,22 · txt]"
+            echo "  Qwen 3.6 35B-A3B MoE  Q8_0"
+            echo "    1) vision              — MTP n2 — f16  — 256k   (2072 pp /  93.7 tg) [L 18,22 · vis]"
+            echo "    2) text                — MTP n2 — f16  — 256k   (2129 pp /  94.0 tg) [L 18,22 · txt]"
             echo
-            echo "  Qwen 3.8 27B dense  Q8_0"
-            echo "    3) vision   — MTP n3 — f16 — 256k  ( 825 pp /  35.0 tg) [L 28,37 · vis]"
-            echo "    4) TENSOR   — MTP n3 — f16 — 216k  ( 947 pp /  40.3 tg MTP, 2x prefill) [T 50,50 · vis] [PR #25051]"
-            echo "    5) TENSOR   — MTP n3 — f16 — 256k FULL ctx  (~19 tg raw, text-only) [T 49,51 · txt] [PR #25051]"
-            echo "    6) TENSOR+ADAPTIVE — f16 — 256k FULL  (809 pp / 50.9 tg; 81.7 tg @98k) [T 49,51 · vis] ★"
+            echo "  Qwen 3.8 27B dense — Q8_0"
+            echo "    3) layer, vision       — MTP n3 — f16  — 256k   ( 825 pp /  35.0 tg) [L 28,37 · vis]"
+            echo "    4) tensor, decode      — MTP n3 — f16  — 216k   ( 947 pp /  40.3 tg, 2x prefill) [T 50,50 · vis]"
+            echo "    5) tensor, full ctx    — MTP n3 — f16  — 256k   (~19 tg raw, text-only) [T 49,51 · txt]"
+            echo "    6) tensor + adaptive   — MTP    — f16  — 256k   ( 809 pp /  50.9 tg) [T 49,51 · vis] ★"
             echo
-            echo "  Qwen 3.8 27B dense  Q6_K (unsloth) — tensor split [PR #25051]"
-            echo "    7) decode  — MTP n3 — q8_0 — 192k  ( 697 pp / 28.65 tg unspec, longest fast ctx) [T 70,30 · vis]"
-            echo "    8) decode  — MTP n3 — f16  — 144k  ( 718 pp / 28.37 tg unspec, full-precision KV) [T 68,32 · vis]"
-            echo "    9) context — MTP n3 — f16  — 256k  ( 889 pp / 23.17 tg unspec, full context) [T 50,50 · vis]"
+            echo "  Qwen 3.8 27B dense — Q6_K (unsloth)"
+            echo "    7) tensor, decode      — MTP n3 — q8_0 — 192k   ( 697 pp / 28.65 tg unspec) [T 70,30 · vis]"
+            echo "    8) tensor, decode      — MTP n3 — f16  — 144k   ( 718 pp / 28.37 tg unspec) [T 68,32 · vis]"
+            echo "    9) tensor, full ctx    — MTP n3 — f16  — 256k   ( 889 pp / 23.17 tg unspec) [T 50,50 · vis]"
             echo
-            echo "  Qwen 3.8 27B dense  UD-Q6_K_XL (unsloth Dynamic v3.0) — tensor split [PR #25051]"
-            echo "   10) TENSOR   — MTP n3 — f16 — 256k FULL  (19.62 tg raw @65k, +5.3% vs 49/51) [T 50,50 · vis] ★NEW"
+            echo "  Qwen 3.8 27B dense — UD-Q6_K_XL (unsloth Dynamic v3.0)"
+            echo "   10) tensor, full ctx    — MTP n3 — f16  — 262144 ( 934 pp / 25.4 tg raw; 585/23.1 @d65k) [T 50,50 · vis] ★"
             echo
             echo "  Muse Glimmer 30B  Q8_0"
-            echo "   11) 128k     — DFlash n2 — f16        ( 743 pp /  31.7 tg; prefer ROCm) [L 1,1 · txt]"
+            echo "   11) layer              — DFlash n2 — f16 — 128k  ( 743 pp /  31.7 tg; prefer ROCm) [L 1,1 · txt]"
             echo
-            PRESET_CHOICE="$(prompt_choice "Preset (1/2/3/4/5/6/7/8/9/10/11): ")"
+            PRESET_CHOICE="$(prompt_choice "Preset (1-11): ")"
             case "$PRESET_CHOICE" in
                 1) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-vulkan-dual-q8-256k-mmproj.sh" ;;
                 2) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-vulkan-dual-256k-textonly.sh" ;;
