@@ -41,18 +41,51 @@ The layer-split PREFILL win is the COMPILER, not the runtime: the third arm
 Layer-split tg is flat -- clang contributes nothing to decode, as expected for a
 bandwidth-bound path.
 
-## Cross-backend, sm=tensor, d0 only
+## Cross-backend, sm=tensor 50/50, ub1024/b2048, devices PINNED  (r=3)
 
-| backend                          | pp2048 | tg256 |
-|----------------------------------|--------|-------|
-| Vulkan llama.cpp-tp-adaptive     | 391.74 | 20.97 |
-| ROCm 7.1                         | 413.46 | 28.29 |
-| ROCm 10                          | 427.62 | 29.95 |
+| test          | Vulkan        | Vulkan+gfxq   | ROCm 10       | winner       |
+|---------------|---------------|---------------|---------------|--------------|
+| pp2048 d0     | 940.68 +-1.47 | 933.63 +-1.06 | 434.91 +-0.13 | Vulkan 2.2x  |
+| tg256  d0     |  24.56 +-0.09 |  25.38 +-0.06 |  30.29 +-0.00 | ROCm +19%    |
+| pp2048 d65536 | 578.56 +-2.44 | 584.99 +-1.80 | 304.60 +-1.65 | Vulkan 1.9x  |
+| tg256  d65536 |  22.57 +-0.07 |  23.14 +-0.08 |  27.18 +-0.27 | ROCm +17%    |
 
-ROCm 10 is +42.8% on tg over the shipped Vulkan build at d0. CAVEAT: the Vulkan
-arm is commit 7872b3e3e, not 030ebb558, so this comparison carries a commit
-delta the ROCm-vs-ROCm one does not. The Vulkan d65536 rows did not complete
-and have not been diagnosed. Not yet acted on.
+VULKAN WINS PREFILL ~2x. ROCM WINS DECODE ~18%. Not a clean backend win either
+way -- it depends whether the workload is prefill- or decode-dominated.
+
+### CRITICAL: you MUST pass --device / -dev on Vulkan
+
+This machine enumerates THREE Vulkan devices. Vulkan2 is the CPU
+(RADV RAPHAEL_MENDOCINO) and reports 32,475 MiB "free", so llama.cpp's auto
+device selection happily includes it in the tensor split. The result is a
+catastrophic slowdown, an idle R9700, and VRAM readings that trip the ceiling
+guard for no real reason.
+
+  contaminated (auto):  pp2048 d0 = 391-402   tg256 d0 = 20.97-23.19
+  pinned (Vulkan0/1):   pp2048 d0 = 940.68    tg256 d0 = 24.56
+
+The production presets are SAFE -- they set LLAMA_DEVICE="Vulkan0,Vulkan1",
+which llamactl passes as --device. Any ad-hoc llama-bench or llama-server
+invocation must pass `-dev Vulkan0/Vulkan1` (SLASHES for llama-bench, commas
+for the server) or the numbers are worthless. ROCm is unaffected: it enumerates
+only 2 devices.
+
+All Vulkan rows in raw/ marked -INVALID-igpu were collected before this was
+found. The ROCm-vs-ROCm comparison above was never contaminated.
+
+## GGML_VK_ALLOW_GRAPHICS_QUEUE=1
+
++3.3% tg at d0, +2.5% tg at d65536, prefill flat. Small but reproducible with
+non-overlapping error bars. Upstream (discussion #21043) reports -8% on DENSE
+models and +4.7% on MoE; measured POSITIVE here, so the dense warning does not
+apply to this model. SHIPPED to the seven 27B Vulkan tensor presets. NOT applied
+to the 35B-A3B or Muse Glimmer presets -- different models, unmeasured.
+
+Also tested, both dead:
+- `-ub 2048 -b 16384`: claimed +29% prefill upstream. Measured -2.29% with
+  +-17.77 variance. Do not use.
+- `RADV_PERFTEST=nogttspill`: -0.25% pp, +0.27% tg. Nil. Does not change the
+  GTT reading either.
 
 ## Negative / dead ends
 - `-sm row` CANNOT LOAD this model on either ROCm version ("failed to load
@@ -64,3 +97,9 @@ and have not been diagnosed. Not yet acted on.
 All 8 ROCm presets repointed to llama.cpp-rocm10. The 4 tensor-decode presets
 inherit via `source` and needed no edit. Vulkan presets untouched.
 Server smoke-tested on port 18234: /health ok, completion returned, 33.8 t/s.
+
+## Ceiling-guard false trip
+An earlier ROCm d65536 run tripped the 24,200 MiB guard at 24,347 MiB. The
+pinned re-run of the same configuration completed with the XTX at 19,079 MiB.
+Treat single-sample guard trips as load spikes, not ceiling breaches -- measure
+the SETTLED value.

@@ -92,6 +92,10 @@ PROFILE_NAME="preset-38-27b-q8-mtp-vulkan-TENSOR-f16-200k"
 LLAMA_BINARY="$LLM_ROOT/llama.cpp-vulkan-tp/build/bin/llama-server"
 LLAMA_MODEL="$LLAMA_SERVER_ROOT/models/Qwen3.8-27B-Q8_0.gguf"
 LLAMA_BACKEND="vulkan"
+# +3.3% tg d0 / +2.5% tg d65536 on this model, prefill flat (2026-08-29, r=3,
+# devices pinned). Upstream reports -8% on DENSE models -- measured positive here.
+export GGML_VK_ALLOW_GRAPHICS_QUEUE=1
+
 LLAMA_DEVICE="Vulkan0,Vulkan1"
 LLAMA_CONTEXT=216064
 LLAMA_UBATCH=1024
