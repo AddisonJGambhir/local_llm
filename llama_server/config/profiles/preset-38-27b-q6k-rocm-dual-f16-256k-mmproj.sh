@@ -176,7 +176,7 @@ export HIP_VISIBLE_DEVICES=0,1
 export MTMD_BACKEND_DEVICE=ROCm1
 
 PROFILE_NAME="preset-38-27b-q6k-mtp-rocm-dual-f16-256k-mmproj"
-LLAMA_BINARY="$LLM_ROOT/llama.cpp/build/bin/llama-server"
+LLAMA_BINARY="$LLM_ROOT/llama.cpp-rocm10/build/bin/llama-server"
 LLAMA_MODEL="$LLAMA_SERVER_ROOT/models/Qwen3.8-27B-Q6_K.gguf"
 LLAMA_BACKEND="rocm"
 LLAMA_DEVICE="ROCm0,ROCm1"

@@ -58,7 +58,7 @@ source "$LLAMA_SERVER_ROOT/config/profiles/default.sh"
 export HIP_VISIBLE_DEVICES=0,1
 
 PROFILE_NAME="preset-muse-glimmer-30b-q8-rocm-dual-128k-dflash"
-LLAMA_BINARY="$LLM_ROOT/llama.cpp/build/bin/llama-server"
+LLAMA_BINARY="$LLM_ROOT/llama.cpp-rocm10/build/bin/llama-server"
 LLAMA_MODEL="$LLAMA_SERVER_ROOT/models/Muse-Glimmer-30B-Q8_0.gguf"
 LLAMA_BACKEND="rocm"
 LLAMA_DEVICE="ROCm0,ROCm1"

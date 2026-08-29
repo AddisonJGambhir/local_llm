@@ -11,7 +11,7 @@ PROFILE_NAME="shared-defaults-single-gpu-vulkan-fallback"
 
 # Mainline serves qwen35moe MTP on Vulkan as of 10358; BeeLlama measured within
 # 0.4% (206.0 vs 204.9 t/s) and is 2 days older, so mainline is preferred.
-LLAMA_BINARY="$LLM_ROOT/llama.cpp/build/bin/llama-server"
+LLAMA_BINARY="$LLM_ROOT/llama.cpp-rocm10/build/bin/llama-server"
 LLAMA_MODEL="$LLAMA_SERVER_ROOT/models/Qwen3.6-35B-A3B-Q8_0.gguf"
 LLAMA_ALIAS="local"
 
