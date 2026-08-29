@@ -156,40 +156,40 @@ case "$BACKEND_CHOICE" in
             echo "Presets — ROCm:"
             echo "  split ratios: [L n,n]=layer [T n,n]=tensor (XTX,R9700; 1,1=auto)  vis=mmproj  txt=text-only"
             echo
-            echo "  Qwen 3.6 35B-A3B MoE  Q8_0  (fastest overall)"
-            echo "    1) vision   — MTP n2 — f16 — 256k  (2511 pp /  81.5 tg) [L 16,24 · vis]"
-            echo "    2) text     — MTP n2 — f16 — 256k  (2538 pp /  83.2 tg) [L 16,24 · txt]"
+            echo "  Qwen 3.6 35B-A3B MoE  Q8_0"
+            echo "    1) vision      — MTP n2 — f16 — 256k   (2511 pp /  81.5 tg) [L 16,24 · vis]"
+            echo "    2) text        — MTP n2 — f16 — 256k   (2538 pp /  83.2 tg) [L 16,24 · txt]"
             echo
-            echo "  Qwen 3.8 27B dense"
-            echo "    3) Q8_0 vision — MTP n3 — f16 — 245760 (509 pp@d65k / 34.4 tg) [L 1,1 · vis]"
-            echo "    4) Q6_K vision — MTP n3 — f16 — 245760 (566 pp@d65k / 32.2 tg) [L 38,27 · vis]"
-            echo "    5) Q6_K_P text — MTP n3 — f16 — 256k  (1208 pp /  34.5 tg) uncensored [L 34,31 · txt]"
+            echo "  Qwen 3.8 27B dense — layer split"
+            echo "    3) Q8_0 vision — MTP n3 — f16 — 245760 ( 509 pp@d65k / 34.4 tg) [L 1,1 · vis]"
+            echo "    4) Q6_K vision — MTP n3 — f16 — 245760 ( 566 pp@d65k / 32.2 tg) [L 38,27 · vis]"
+            echo "    5) Q6_K_P text — MTP n3 — f16 — 256k   (1208 pp /  34.5 tg) uncensored [L 34,31 · txt]"
+            echo
+            echo "  Qwen 3.8 27B dense — tensor split (long-context pp shown)"
+            echo "    6) Q8_0 vision — MTP n3 — f16 — 245760 ( 275 pp@d65k / 44.8 tg; pp -46%) [T 45,55 · vis] ★"
+            echo "    7) Q6_K vision — MTP n3 — f16 — 245760 ( 295 pp@d65k / 43.6 tg; pp -48%) [T 1,1 · vis]"
+            echo "    8) Q6_K decode — MTP n3 — f16 — 192512 ( 415 pp / 49-54 tg, FASTEST DECODE) [T 58,42 · vis] ★"
+            echo "    9) Q8_0 decode — MTP n3 — f16 — 131072 (29.4 raw / 45-48 tg MTP, fastest Q8) [T 58,42 · vis]"
+            echo "   10) UD-Q6_K_XL  — MTP n3 — f16 — 262144 ( 435 pp / 30.3 tg raw, ROCm 10) [T 50,50 · vis] ★"
             echo
             echo "  Muse Glimmer 30B  Q8_0"
-            echo "    6) 128k     — DFlash n2 — f16        ( 986 pp /  33.2 tg) [L 1,1 · txt]"
-            echo "    7) 256k     — DFlash n2 — f16 — YaRN ( 891 pp /  34.1 tg, retrieval 3/3) [L 1,1 · txt]"
+            echo "   11) 128k        — DFlash n2 — f16        ( 986 pp /  33.2 tg) [L 1,1 · txt]"
+            echo "   12) 256k        — DFlash n2 — f16 — YaRN ( 891 pp /  34.1 tg, retrieval 3/3) [L 1,1 · txt]"
             echo
-            echo "  Qwen 3.8 27B dense — tensor decode (long-context pp shown)"
-            echo "    8) Q8_0 vision — MTP n3 — f16 — 245760 (275 pp@d65k / 44.8 tg; pp -46%) [T 45,55 · vis] ★"
-            echo "    9) Q6_K vision — MTP n3 — f16 — 245760 (295 pp@d65k / 43.6 tg; pp -48%) [T 1,1 · vis]"
-            echo "   10) Q6_K decode — MTP n3 — f16 — 192512 (415 pp / 49-54 tg, FASTEST DECODE) [T 58,42 · vis] ★"
-            echo "   11) Q8_0 decode — MTP n3 — f16 — 131072 (29.4 raw / 45-48 tg MTP, fastest Q8) [T 58,42 · vis]"
-              echo "   12) UD-Q6_K_XL — MTP n3 — f16 — 262144 (435 pp / 30.3 tg raw, ROCm 10) [T 49,51 · vis]"
-            echo
-            PRESET_CHOICE="$(prompt_choice "Preset (1/2/3/4/5/6/7/8/9/10/11/12): ")"
+            PRESET_CHOICE="$(prompt_choice "Preset (1-12): ")"
             case "$PRESET_CHOICE" in
                 1) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-rocm-dual-q8-256k-mmproj.sh" ;;
                 2) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-rocm-dual-256k-textonly.sh" ;;
                 3) PRESET_PROFILE="$P/preset-38-27b-q8-rocm-dual-q8-256k-mmproj.sh" ;;
                 4) PRESET_PROFILE="$P/preset-38-27b-q6k-rocm-dual-f16-256k-mmproj.sh" ;;
                 5) PRESET_PROFILE="$P/preset-38-27b-q6kp-hauhau-rocm-dual-f16-256k.sh" ;;
-                6) PRESET_PROFILE="$P/preset-muse-glimmer-30b-q8-rocm-dual-128k-dflash.sh" ;;
-                7) PRESET_PROFILE="$P/preset-muse-glimmer-30b-q8-rocm-dual-256k-yarn.sh" ;;
-                8) PRESET_PROFILE="$P/preset-38-27b-q8-rocm-dual-f16-256k-mmproj-tensor-decode.sh" ;;
-                9) PRESET_PROFILE="$P/preset-38-27b-q6k-rocm-dual-f16-256k-mmproj-tensor-decode.sh" ;;
-                10) PRESET_PROFILE="$P/preset-38-27b-q6k-rocm-tensor-decode-58-42-188k.sh" ;;
-                11) PRESET_PROFILE="$P/preset-38-27b-q8-rocm-tensor-decode-58-42-128k.sh" ;;
-                  12) PRESET_PROFILE="$P/preset-38-27b-udq6kxl-rocm-tensor-f16-256k.sh" ;;
+                6) PRESET_PROFILE="$P/preset-38-27b-q8-rocm-dual-f16-256k-mmproj-tensor-decode.sh" ;;
+                7) PRESET_PROFILE="$P/preset-38-27b-q6k-rocm-dual-f16-256k-mmproj-tensor-decode.sh" ;;
+                8) PRESET_PROFILE="$P/preset-38-27b-q6k-rocm-tensor-decode-58-42-188k.sh" ;;
+                9) PRESET_PROFILE="$P/preset-38-27b-q8-rocm-tensor-decode-58-42-128k.sh" ;;
+                10) PRESET_PROFILE="$P/preset-38-27b-udq6kxl-rocm-tensor-f16-256k.sh" ;;
+                11) PRESET_PROFILE="$P/preset-muse-glimmer-30b-q8-rocm-dual-128k-dflash.sh" ;;
+                12) PRESET_PROFILE="$P/preset-muse-glimmer-30b-q8-rocm-dual-256k-yarn.sh" ;;
                 *) echo "Invalid preset selection." >&2; exit 2 ;;
             esac
         else
