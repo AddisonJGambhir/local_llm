@@ -174,8 +174,9 @@ case "$BACKEND_CHOICE" in
             echo "    9) Q6_K vision — MTP n3 — f16 — 245760 (295 pp@d65k / 43.6 tg; pp -48%) [T 1,1 · vis]"
             echo "   10) Q6_K decode — MTP n3 — f16 — 192512 (415 pp / 49-54 tg, FASTEST DECODE) [T 58,42 · vis] ★"
             echo "   11) Q8_0 decode — MTP n3 — f16 — 131072 (29.4 raw / 45-48 tg MTP, fastest Q8) [T 58,42 · vis]"
+              echo "   12) UD-Q6_K_XL — MTP n3 — f16 — 262144 (435 pp / 30.3 tg raw, ROCm 10) [T 49,51 · vis]"
             echo
-            PRESET_CHOICE="$(prompt_choice "Preset (1/2/3/4/5/6/7/8/9/10/11): ")"
+            PRESET_CHOICE="$(prompt_choice "Preset (1/2/3/4/5/6/7/8/9/10/11/12): ")"
             case "$PRESET_CHOICE" in
                 1) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-rocm-dual-q8-256k-mmproj.sh" ;;
                 2) PRESET_PROFILE="$P/preset-36-35b-a3b-q8-rocm-dual-256k-textonly.sh" ;;
@@ -188,6 +189,7 @@ case "$BACKEND_CHOICE" in
                 9) PRESET_PROFILE="$P/preset-38-27b-q6k-rocm-dual-f16-256k-mmproj-tensor-decode.sh" ;;
                 10) PRESET_PROFILE="$P/preset-38-27b-q6k-rocm-tensor-decode-58-42-188k.sh" ;;
                 11) PRESET_PROFILE="$P/preset-38-27b-q8-rocm-tensor-decode-58-42-128k.sh" ;;
+                  12) PRESET_PROFILE="$P/preset-38-27b-udq6kxl-rocm-tensor-f16-256k.sh" ;;
                 *) echo "Invalid preset selection." >&2; exit 2 ;;
             esac
         else

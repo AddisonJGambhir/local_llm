@@ -103,3 +103,28 @@ An earlier ROCm d65536 run tripped the 24,200 MiB guard at 24,347 MiB. The
 pinned re-run of the same configuration completed with the XTX at 19,079 MiB.
 Treat single-sample guard trips as load spikes, not ceiling breaches -- measure
 the SETTLED value.
+
+## ROCm tensor-split ratio fit + decode (UD-Q6_K_XL, c=262144, f16 KV, mmproj)
+
+Settled VRAM measured AFTER a real generation, not at load.
+Desktop baseline during the check: 3,379-3,525 MiB.
+
+| ratio | XTX settled | headroom to card top (24,560) |
+|-------|-------------|-------------------------------|
+| 50,50 |      24,217 |   343 MiB  <-- SHIPPED        |
+| 49,51 |      21,813 | 2,747 MiB  <-- fallback       |
+| 48,52 |      21,597 | 2,963 MiB                     |
+| 46,54 |      21,297 | 3,263 MiB                     |
+
+Context is 262144 at EVERY ratio -- that is the model's architectural max, not
+a VRAM-limited number. The ratio buys decode, not context.
+
+| depth  | ts 50,50      | ts 49,51      | 50,50 gain |
+|--------|---------------|---------------|------------|
+| d0     | 30.01 +-0.14  | 29.37 +-0.01  |     +2.17% |
+| d65536 | 27.20 +-0.18  | 25.97 +-0.16  |     +4.76% |
+
+The 49->50 step costs 2,404 MiB of XTX VRAM for that gain -- tensor-boundary
+rounding, the same non-monotonic effect the Vulkan preset documents. 50,50 was
+shipped on the user's explicit acceptance of 24,217. It WILL OOM if the desktop
+baseline grows ~350 MiB; fall back to 49,51 for -4.76% decode and 2.7 GiB slack.
