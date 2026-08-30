@@ -55,3 +55,50 @@ support treating 42.1 t/s as the machine's fixed shallow-decode ceiling; the
 same general configuration at a safely smaller context produced a 44.83 t/s
 median. It does not yet identify whether the difference is context, cache
 state, thermals, software state, or ordinary run-to-run variance.
+
+## Vulkan timing trace: the decode is not 89% host overhead
+
+Run directory: `/tmp/fn-sweep/perf-concurrent-q2-49k`
+
+This repeated the 49,152-context configuration with Vulkan timestamp logging
+enabled and one warmup plus one measured 256-token generation. Timestamp
+logging perturbed throughput, so its speed is diagnostic rather than a fair
+benchmark:
+
+    warmup:  36.5281 t/s
+    measured: 37.4070 t/s
+
+The measured request produced two complete device timing blocks:
+
+    Vulkan0 / XTX / 18-layer portion:   2.32829 s / 256 =  9.095 ms/token
+    Vulkan1 / R9700 / 30-layer portion: 3.85375 s / 256 = 15.054 ms/token
+    summed GPU timestamp time:          6.18204 s / 256 = 24.149 ms/token
+
+The device attribution is derived from the approximately 18:30 ratio in
+per-operation invocation counts, which matches the configured layer split;
+it is not copied from a prior report. The logger itself serializes or adds
+timestamp-query overhead: the uninstrumented baseline median is 22.309
+ms/token, while the instrumented request is 26.733 ms/token. Therefore the
+timestamp total should not be used as an unperturbed latency number.
+
+It is nevertheless decisive against the prior claim that only about 2.7
+ms/token is real GPU work and approximately 89% of decode is host overhead.
+Here, directly measured GPU query time is of the same order as the entire
+decode wall time. The profiler slowed decode by about 17%, but no reasonable
+interpretation of that perturbation reduces 24.149 ms/token to 2.7 ms/token.
+
+The largest aggregate kernel families on both devices include the Q2 expert
+mat-vec path, Q5/Q6 mat-vec operations, and high-count elementwise/fused
+operations. On the 30-layer R9700 portion, representative 256-token totals
+were:
+
+    MUL:                                      271.2 ms
+    IQ2_XS expert MUL_MAT_ID_VEC:             262.1 ms
+    Q5_K m=10240 mat-vec bundle:              255.5 ms
+    IQ4_NL expert MUL_MAT_ID_MUL:             217.5 ms
+    Q6_K m=2560,k=6144 mat-vec bundle:        156.1 ms
+
+These aggregates contain many invocations and are not single-kernel latency.
+They show that both quantized expert mat-vec work and graph/kernel multiplicity
+are live optimization targets. They do not support dismissing memory/quant
+work on the basis of a host-overhead arithmetic estimate.
