@@ -245,3 +245,29 @@ identical VRAM placement. That difference is smaller than run spread and does
 not establish a regression, but it decisively fails to establish an
 end-to-end improvement. Do not cherry-pick this patch for the current decode
 configuration on the strength of its microbenchmark claim.
+
+## Independent KVarN K6/V5 validation probe
+
+Run directory: `/tmp/fn-sweep/kvarn65-independent-16k-probe`
+
+The dirty BeeLlama/Qwen integration binary identifies itself as commit
+`3746fb185-dirty`. It was started at 16,384 context with the IQ3_XXS body,
+400/600 layer split, ubatch 512, mmap PLE override, and KVarN6 K / KVarN5 V.
+This was one warmup plus one 128-token measured probe, not a benchmark series.
+
+    warmup: 30.2055 t/s
+    measured: 29.4223 t/s
+    settled R9700/XTX: 29,997 / 23,518 MiB
+    RSS: 256,104 KiB
+
+Generated text was coherent. With `GGML_KVARN_DEBUG_ROUTES=1`, both Vulkan
+devices independently reported K6/V5 `route=portable-native`, `entry=direct`,
+and `fallback=none` for prompt and decode shapes. This establishes that the
+probe exercised native KVarN attention rather than silent materialization.
+
+It also establishes a large shallow-decode penalty versus the approximately
+44 t/s standard-Q8 path. The debug route reported `tail_stride=0`,
+`tail_history=0`, and `tail_current=0`; the fork describes an intrinsic exact
+128-token suffix, but that suffix's stage-storage semantics have not yet been
+independently audited. Coherent short output is necessary, not sufficient, for
+a quality claim.
