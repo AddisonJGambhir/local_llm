@@ -4,9 +4,11 @@
 # (qwen4exp.context_length); there is nothing above it without RoPE extension.
 # ============================================================================
 # Measured (5-pass median shallow; full-depth probe at 199,379 tokens):
-#   shallow tg 47.9774  (min 46.7001, max 48.6214, spread 1.9213)
+#   shallow tg 50.0285  (min 48.1162, max 50.0814) -- 5-pass median
+#   deep pp 585.63, deep tg 41.0227 at 8,948 tokens
 #   R9700 31,069 MiB (1,131 spare under 32,200)
-#   XTX   22,851 MiB (1,349 spare under 24,200)
+#   XTX   23,772 MiB (428 spare under 24,200)
+#   NO CPU EXPERT OFFLOAD. Every expert is in VRAM.
 #   FULL-DEPTH VALIDATED: a 199,379-token prefill ran clean, zero guard
 #   strikes, peak R9700 31,075 / XTX 22,910. pp 319.87 and tg 12.5397 at
 #   that depth. This is the only 262,144 profile proven at full depth.
@@ -47,16 +49,24 @@
 #   shallow tg 47.9324 (3-pass median), deep pp 976.6169, deep tg 40.8701
 #   R9700 31,627 (573 spare), XTX 23,535 (665 spare)
 #
-# WHY ONE EXPERT LAYER IS ON CPU: all-GPU at 262,144 measures faster (48.98 to
-# 49.48 shallow) but needs 32,544 MiB on the R9700 or 24,384 on the XTX, both
-# over guard. Exactly one expert layer must leave the GPUs. It must go to CPU,
-# never to the other card: cross-card expert moves measured 34.75 to 38.80 t/s
-# against 49.48 for the same placement unsplit.
-#
-# WHY blk.11: 5-pass medians at this exact config -- blk.11 48.3925 (spread
-# 0.3459), blk.13 47.7699 (1.5189), blk.9 46.2938 (3.1533), blk.5 47.83,
-# blk.0 42.30. Low layers are the worst choice. blk.11 is both the fastest
-# and by far the most stable. Do not "simplify" this to blk.0 or blk.47.
+# WHY NO CPU EXPERT OFFLOAD: an earlier revision of this preset put blk.11's
+# experts on CPU and measured 48.3925. Moving that layer back onto the GPUs --
+# possible once token_embd.weight also goes to CPU, which frees ~341 MiB and
+# costs nothing -- measures 50.0285. The CPU expert layer was costing ~1.6 t/s
+# and buying headroom that token_embd already provides. If you ever DO need to
+# shed a layer: send it to CPU, never to the other card (cross-card expert
+# moves measured 34.75 to 38.80 t/s against 49.48 unsplit), and pick a middle
+# layer -- blk.11 48.3925, blk.13 47.7699, blk.9 46.2938, blk.0 42.30.
+
+# BALANCE TABLE (same split, same -ot, all-GPU, q8_0 KV, all verified clean):
+#   ctx      ub    tg      pp     deep tg   R9700 spare   XTX spare
+#   262,144  128   50.03   586    41.02     1,131         428
+#   229,376  128   50.13   585    41.00     1,539         710
+#   163,840  512   49.86   767    38.81     1,280         542
+#   131,072  512   48.22   816    39.42     1,740         738
+# ub 512 is the practical prefill ceiling. ub 1024 and 2048 breach at every
+# context tried (131,072 with ub 2048 reached R9700 32,601 against the 32,200
+# guard). Pick 163,840/ub512 for balance, 262,144/ub128 for maximum context.
 #
 # WHY -ub 128 AND NOT 256: both fit at load, and 256 is 0.4 t/s faster, but
 # the prefill-time KQ mask is ctx x ubatch x 4 bytes per attention-hosting
@@ -121,5 +131,5 @@ LLAMA_EXTRA_ARGS=(
     --flash-attn on
     --load-mode mmap
     --tensor-read-lazy on
-    -ot 'per_layer_token_embd\.weight=CPU,token_embd\.weight=CPU,blk\.11\.ffn_(gate|up|down)_exps\.weight=CPU'
+    -ot 'per_layer_token_embd\.weight=CPU,token_embd\.weight=CPU'
 )

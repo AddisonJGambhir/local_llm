@@ -223,3 +223,64 @@ proof on this model.** Sweep prompt depth (16K, 32K, 64K, 128K, 200K) against
 each profile, record peak card VRAM at every depth, and either lower ubatch or
 add one CPU expert layer until a full-context prefill is clean. Run those
 probes detached — a 200K-token prefill takes about eleven minutes.
+
+## 10. Correction and the real frontier (later same day)
+
+Sections 1-9 were superseded within the same session. Two claims there are
+wrong and are withdrawn:
+
+1. **The CPU expert layer was never needed.** Putting `blk.11`'s experts on
+   CPU cost about 1.6 t/s and bought headroom that `token_embd.weight=CPU`
+   already provides for free. All-GPU at split `400,600` is strictly better.
+2. **"976.62 pp at 196,608" is withdrawn.** That was a `-ub 2048` run that
+   survived only because the desktop happened to hold less XTX VRAM in that
+   minute. Repeats breached: 196,608/ub2048 reached XTX 24,442 and
+   212,992/ub2048 reached XTX 24,445, both against the 24,200 guard.
+
+### Verified frontier
+
+Split `400,600`, `-ot 'per_layer_token_embd\.weight=CPU,token_embd\.weight=CPU'`,
+q8_0 K and V, every expert in VRAM. tg is a 5-pass median; pp is the
+8,948-token probe. "Spare" is MiB under guard. Every row below ran clean.
+
+| ctx | ub | tg | pp | deep tg | R9700 spare | XTX spare |
+|---:|---:|---:|---:|---:|---:|---:|
+| 262,144 | 128 | 50.0285 | 585.63 | 41.0227 | 1,131 | 428 |
+| 229,376 | 128 | 50.1288 | 584.82 | 41.0038 | 1,539 | 710 |
+| 196,608 | 128 | 50.0367 | — | — | 1,946 | 1,009 |
+| 163,840 | 512 | 49.8583 | 767.47 | 38.8108 | 1,298 | 508 |
+| 131,072 | 512 | 48.2207 | 816.50 | 39.4180 | 1,740 | 738 |
+| 49,152 | 128 | 50.0537 | — | — | 3,781 | 2,479 |
+
+**50+ tg is met**, at every context from 49,152 to the full 262,144. The
+earlier "48.3925 ceiling" in section 4 was an artefact of the unnecessary CPU
+expert layer, not a property of the hardware.
+
+### ubatch ceiling
+
+`-ub 512` is the practical prefill ceiling. `-ub 1024` and `-ub 2048` breach
+at every context tried, including low ones: 131,072 with ub 2048 reached
+R9700 32,601, and 131,072 with ub 1024 reached R9700 32,423, both against the
+32,200 guard. Higher ubatch does not become safe by lowering context.
+
+### Allocation is not reproducible
+
+Peak VRAM for an identical command varies by up to about 1 GiB between
+launches, and the XTX baseline moves between 1,332 and 2,100 MiB with whatever
+desktop apps are open. Any configuration with less than roughly 500 MiB of
+spare on either card is a coin flip, not a configuration. This is why the
+frontier above stops at ub 512 rather than at the largest ubatch that has ever
+been observed to load.
+
+### What the goal now looks like
+
+| requirement | best verified | met |
+|---|---:|---|
+| max context | 262,144, model native max, at 50.0285 tg | yes |
+| KV q8_0 or better | q8_0 K and V on every row | yes |
+| tg 50+ | 50.0285 at 262,144; 50.1288 at 229,376 | yes |
+| pp 800+ | 816.50 at 131,072 | yes, but not simultaneously |
+
+No single configuration delivers 50+ tg, 800+ pp and 262,144 context at once;
+prefill and context trade against each other through ubatch. The two shipped
+presets are the ends of that curve.
