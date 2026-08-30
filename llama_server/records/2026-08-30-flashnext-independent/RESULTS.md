@@ -180,3 +180,29 @@ The lone 128-token measured sample was 44.9364 t/s, again only a probe. The
 approximately 240--250 MiB per-card saving is large enough to justify a full
 49,152-context guarded run at this split; throughput and safety at that context
 still require direct measurement.
+
+## IQ3_XXS safe 49,152-context result
+
+Run directory: `/tmp/fn-sweep/iq3xxs-split40-ub512-49k-full`
+
+Configuration differs from the rejected 49K step only in the independently
+measured safer placement levers: layer split 400/600 and ubatch 512.
+
+Raw decode samples:
+
+    warmup: 45.0332 t/s
+    measured: 44.8967, 43.5371, 43.9283 t/s
+    median: 43.9283 t/s
+    spread: 1.3596 t/s
+
+Settled resources after the fourth request:
+
+    R9700 (sysfs card0): 30,477 MiB
+    XTX (sysfs card1):   23,857 MiB
+    process RSS:          1,093,252 KiB
+
+The guard recorded no breach and output was coherent. This is the first
+independently completed IQ3_XXS result at the same context as the Q2 baseline.
+Its median is 2.0% below the earlier Q2 median, but that is not yet a quant-only
+comparison because the Q2 run used split 385/615 and ubatch 1,024. A Q2 control
+with this exact 400/600, ubatch-512 configuration is required.
