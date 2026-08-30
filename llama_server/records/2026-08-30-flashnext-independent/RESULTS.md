@@ -165,3 +165,18 @@ placement boundary. It gives the R9700 ample room but leaves only 581 MiB under
 the guarded XTX ceiling before increasing context. The lone 128-token measured
 sample was 44.2001 t/s; it is a placement probe, not a comparable throughput
 result.
+
+### Ubatch placement probe: 512 at 16,384 context
+
+Run directory: `/tmp/fn-sweep/iq3xxs-split40-ub512-16k-probe`
+
+At the 400/600 split, reducing ubatch from 1,024 to 512 changed settled usage
+from 30,158/23,619 MiB to:
+
+    R9700 (sysfs card0): 29,909 MiB  (-249 MiB)
+    XTX (sysfs card1):   23,378 MiB  (-241 MiB)
+
+The lone 128-token measured sample was 44.9364 t/s, again only a probe. The
+approximately 240--250 MiB per-card saving is large enough to justify a full
+49,152-context guarded run at this split; throughput and safety at that context
+still require direct measurement.
