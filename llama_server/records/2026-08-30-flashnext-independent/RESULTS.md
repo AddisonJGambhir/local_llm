@@ -406,3 +406,37 @@ the patched continuation was coherent and recognized the synthetic repetition,
 while the control fell into repetitive continuation. This establishes a large
 stack-level win, not yet attribution among the three changes. The patched
 1,044 pp result clears the 600 pp target at this measured depth.
+
+### Patched 131,072-context placement step
+
+Run directory: `/tmp/fn-sweep/vulkan-patched-q2-131k-placement`
+
+With Q2 body, Q8_0 K/V, split 400/600, ubatch 256, and the full isolated patch
+stack, 131,072 context loaded and completed one warmup plus one measured
+128-token generation under the guards.
+
+    warmup: 47.7522 t/s
+    measured: 49.6960 t/s
+    settled R9700/XTX: 29,775 / 23,466 MiB
+    RSS: 611,700 KiB
+
+This is a placement step and a single measured sample, not a sustained 50 t/s
+claim. It leaves 2,425 MiB below the user-authorized 32,200 MiB R9700 guard
+and 734 MiB below the 24,200 MiB XTX guard, so a guarded upward context ladder
+is justified.
+
+### Corrected native-MTP branch: sidecar schema mismatch, no performance result
+
+Run directory: `/tmp/fn-sweep/vulkan-mtpbranch-q2-mtp3-r9700-16k`
+
+The corrected `qwen4exp-spec-mtp` branch at `843d5750` was launched at 16K
+with the Q4_K_M MTP sidecar assigned wholly to Vulkan1/R9700, draft Q8 KV,
+and three draft tokens. Target loading completed, but draft loading failed
+before draft allocation with:
+
+    check_tensor_dims: tensor 'blk.48.nextn.fc_embd.weight' not found
+
+The available sidecar is incompatible with this branch's expected MTP tensor
+schema. This is neither an MTP speed result nor a VRAM failure. Find or convert
+a compatible sidecar before retrying; do not cite the old WIP MTP loss as a
+result for this corrected implementation.

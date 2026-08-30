@@ -1,3 +1,8 @@
+# SUPERSEDED by `2026-08-30-FLASHNEXT-HANDOFF-7.md`
+
+The successor independently disproves several technical claims below and is
+the current source of truth. Preserve this file only as historical context.
+
 # Handoff 6: READ THE INCIDENT FIRST. Decode is overhead-bound; tg 50 unproven.
 
 Supersedes `2026-08-30-FLASHNEXT-HANDOFF-5.md`. That document's technical
