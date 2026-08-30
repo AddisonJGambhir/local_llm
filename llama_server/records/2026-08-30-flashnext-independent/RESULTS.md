@@ -354,3 +354,23 @@ This is 7.59% above the exact unpatched 45.0315 t/s median with effectively
 identical VRAM placement. Generated text remained coherent. This establishes a
 real decode win from the isolated fusion pair, but does not yet distinguish the
 two patches from one another.
+
+### One layer shifted to XTX: 49.16 t/s, still below target
+
+Run directory: `/tmp/fn-sweep/vulkan-fusions-q2-split425-49k`
+
+Changing only tensor split from 400/600 to 425/575 shifted one discrete model
+layer from the R9700 to the XTX. A 128-token placement probe produced one 49.82
+t/s sample; the required full run did not sustain that number.
+
+    full warmup: 49.4520 t/s
+    full measured: 48.9480, 49.4649, 49.1566 t/s
+    full median: 49.1566 t/s
+    full spread: 0.5168 t/s
+    settled R9700/XTX: 27,776 / 23,656 MiB
+    RSS: 1,384,752 KiB
+
+The placement adds 1.46% over the fused 400/600 median and 9.16% over the
+original unpatched 400/600 control. It does not establish 50 t/s. The XTX has
+only 544 MiB of guard margin at 49K, so this split cannot be assumed usable at
+high context without reallocating KV or model layers.
