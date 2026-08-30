@@ -206,3 +206,22 @@ independently completed IQ3_XXS result at the same context as the Q2 baseline.
 Its median is 2.0% below the earlier Q2 median, but that is not yet a quant-only
 comparison because the Q2 run used split 385/615 and ubatch 1,024. A Q2 control
 with this exact 400/600, ubatch-512 configuration is required.
+
+### Exact Q2 control: body quant costs 2.5% decode
+
+Run directory: `/tmp/fn-sweep/q2-control-split40-ub512-49k`
+
+The Q2 control held context, split, ubatch, Q8 KV, mmap PLE placement, build,
+prompt, prediction length, and pass count identical to the safe IQ3 run.
+
+    Q2 warmup: 43.9373 t/s
+    Q2 measured: 44.7901, 45.0315, 46.4274 t/s
+    Q2 median: 45.0315 t/s
+    Q2 spread: 1.6373 t/s
+    Q2 settled R9700/XTX: 28,755 / 22,675 MiB
+    Q2 RSS: 974,980 KiB
+
+Against the IQ3 median of 43.9283 t/s, Q2 is 2.51% faster under the exact same
+runtime configuration. It also uses 2,904 MiB less aggregate settled VRAM.
+This isolates a modest but real body-quant cost; it replaces comparisons that
+mixed quant, context, layer split, and ubatch.
