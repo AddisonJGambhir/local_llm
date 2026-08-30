@@ -217,9 +217,9 @@ case "$BACKEND_CHOICE" in
             echo
             echo "  Muse Glimmer 30B  Q8_0"
             echo "   11) layer              — DFlash n2 — f16 — 128k  ( 743 pp /  31.7 tg; prefer ROCm) [L 1,1 · txt]"
-              echo
-              echo "  Qwen3.8-Flash-Next 125B-A6B  UD-IQ3_XXS (n-gram table on CPU)"
-              echo "   12) layer              — no spec  — q8_0 — 81920  ( 688 pp / 42.5 tg; 29.2 @d9k) [L 385,615 · txt] ★NEW"
+            echo
+            echo "  Qwen3.8-Flash-Next 125B-A6B  UD-Q2_K_XL (PLE table on CPU)"
+            echo "   12) layer, full ctx     — no spec  — q8_0 — 262144 ( 855 pp / 49.5 tg; 41.6 @d9k) [L 400,600 · txt] ★NEW"
             echo
             PRESET_CHOICE="$(prompt_choice "Preset (1-12): ")"
             case "$PRESET_CHOICE" in
@@ -234,7 +234,7 @@ case "$BACKEND_CHOICE" in
                 9) PRESET_PROFILE="$P/preset-38-27b-q6k-vulkan-tensor-256k.sh" ;;
                 10) PRESET_PROFILE="$P/preset-38-27b-udq6kxl-vulkan-tensor-f16-256k.sh" ;;
                 11) PRESET_PROFILE="$P/preset-muse-glimmer-30b-q8-vulkan-dual-128k-dflash.sh" ;;
-                12) PRESET_PROFILE="$P/preset-flashnext-iq3xxs-vulkan-layer-82k.sh" ;;
+                12) PRESET_PROFILE="$P/preset-flashnext-q2kxl-vulkan-fusions-262k.sh" ;;
                 *) echo "Invalid preset selection." >&2; exit 2 ;;
             esac
         fi
