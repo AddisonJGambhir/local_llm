@@ -225,3 +225,23 @@ Against the IQ3 median of 43.9283 t/s, Q2 is 2.51% faster under the exact same
 runtime configuration. It also uses 2,904 MiB less aggregate settled VRAM.
 This isolates a modest but real body-quant cost; it replaces comparisons that
 mixed quant, context, layer split, and ubatch.
+
+### IQ3_S register-spill shader patch: no end-to-end win
+
+Run directory: `/tmp/fn-sweep/iq3spill-split40-ub512-49k-full`
+
+The alternate binary at `c98958507` contains the IQ3_S `NUM_COLS > 4` shader
+change from `48a9046e2` plus test-only coverage, on the same `aa1b06d0c` base.
+It was run with the exact safe IQ3 49K configuration.
+
+    patched warmup: 42.5450 t/s
+    patched measured: 43.0711, 43.7388, 43.9635 t/s
+    patched median: 43.7388 t/s
+    patched spread: 0.8924 t/s
+    settled R9700/XTX: 30,477 / 23,857 MiB
+
+The patched median is 0.43% below the unpatched 43.9283 t/s median, with
+identical VRAM placement. That difference is smaller than run spread and does
+not establish a regression, but it decisively fails to establish an
+end-to-end improvement. Do not cherry-pick this patch for the current decode
+configuration on the strength of its microbenchmark claim.
