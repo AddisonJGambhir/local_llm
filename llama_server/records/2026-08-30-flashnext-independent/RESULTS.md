@@ -332,3 +332,25 @@ no-MTP control. Its rising candidate passes make the exact regression size
 somewhat warmup-sensitive, but even its best measured pass remains 10.7% below
 the upstream median. Do not adopt the full branch. Any promising Vulkan fusion
 commits must be isolated on the known-good `aa1b06d0c` base.
+
+### Isolated Vulkan fusions: +7.6% decode
+
+Run directory: `/tmp/fn-sweep/vulkan-fusions-q2-49k`
+
+The two narrow Vulkan changes from the rejected branch were applied without a
+commit to an isolated `aa1b06d0c` worktree: mat-vec elementwise epilog fusion
+from `3c82e945` and fused REPEAT+MUL+ADD from `a4c5df63`. Only the main-model
+hyper-connection graph wiring was ported; the MTP graph was excluded. Runtime
+configuration exactly matched the earlier Q2 control, including lazy mmap.
+
+    fusion warmup: 48.6132 t/s
+    fusion measured: 48.0208, 48.6790, 48.4513 t/s
+    fusion median: 48.4513 t/s
+    fusion spread: 0.6582 t/s
+    settled R9700/XTX: 28,755 / 22,688 MiB
+    RSS: 1,404,068 KiB
+
+This is 7.59% above the exact unpatched 45.0315 t/s median with effectively
+identical VRAM placement. Generated text remained coherent. This establishes a
+real decode win from the isolated fusion pair, but does not yet distinguish the
+two patches from one another.
