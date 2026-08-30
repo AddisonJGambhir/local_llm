@@ -1,7 +1,12 @@
 # ============================================================================
 # Qwen3.8-Flash-Next UD-IQ3_XXS -- Vulkan LAYER split, 81920 ctx -- 2026-08-29
 # ============================================================================
-# tg 42.99 t/s, pp 50.9 t/s. Everything is in VRAM except the PLE n-gram table.
+# pp 687.9 t/s, tg 42.5 @d0 / 29.2 @d9060. Everything is in VRAM except the
+# PLE n-gram table.
+#
+# MEASURE PREFILL WITH A REAL PROMPT. A 20-token prompt reports pp ~50 t/s on
+# this config, which is startup overhead, not throughput. The figures here use a
+# 9,060-token prompt (src/benchmarks/prompts/ concatenated).
 #
 # BUILD: llama.cpp-qwen4exp/build-vulkan @ aa1b06d0c = PR #27880 (contains the
 # qwen4exp arch PR #27742). Mainline llama.cpp CANNOT load this model.
@@ -30,6 +35,28 @@
 # WHY q8_0 KV: f16 is FASTER where it fits (43.50 vs 42.77 at ctx 65536) but
 # pushes past the cliff at 81920 (measured tg 11.82). q8_0 is what makes 81920
 # reachable at full speed.
+#
+# WHY -ub 1024 (9,060-token prompt, ctx 81920):
+#   ub 512   pp 576.6      ub 2048/b4096   pp 69.4   <- CLIFF
+#   ub 1024  pp 694.8      ub 2048/b16384  pp 69.2   <- CLIFF
+#                          ub 4096/b8192   pp 70.6   <- CLIFF
+# ub 1024 is +20% prefill over the default and costs nothing on decode. Anything
+# above it needs compute buffers that do not fit and spills.
+#
+# WHY ts 385,615: --tensor-split takes PROPORTIONS, not percentages, so finer
+# steps than 1%% are available -- but layer assignment is discrete over 48 layers
+# so most fine steps quantise to the same placement (370,630 and 375,625 gave
+# byte-identical VRAM). 385,615 is the step that lands one layer differently:
+#   ts        XTX     margin   R9700   pp
+#   38,62     23429      771   32491   699.1
+#   370,630   23376      824   32490   691.1
+#   385,615   23140     1060   32490   687.9   <-- shipped
+#   36,64     22006     2194   32446    67.0   <- CLIFF
+# THE R9700 IS THE BINDING CONSTRAINT and sits at 32,490 (77 MiB spare) in every
+# working config. Moving weight OFF the XTX does not help -- it pushes the R9700
+# past its limit and falls off the cliff. 385,615 buys 289 MiB of XTX headroom
+# for 1.6%% of prefill, which is worth it because the XTX drives the desktop and
+# its baseline was observed between 1,479 and 3,525 MiB in a single day.
 #
 # WHY --flash-attn on: worthless alone (6.49 -> 6.47 on IQ4_XS) but +39% when
 # paired with quantised KV. Do not ship one without the other.
@@ -69,7 +96,7 @@ LLAMA_BACKEND="vulkan"
 
 LLAMA_DEVICE="Vulkan0,Vulkan1"
 LLAMA_CONTEXT=81920
-LLAMA_UBATCH=512
+LLAMA_UBATCH=1024
 
 LLAMA_CACHE_TYPE_K="q8_0"
 LLAMA_CACHE_TYPE_V="q8_0"
@@ -88,7 +115,7 @@ LLAMA_REASONING="on"
 LLAMA_STARTUP_TIMEOUT=420
 LLAMA_EXTRA_ARGS=(
     --split-mode layer
-    --tensor-split 38,62
+    --tensor-split 385,615
     --batch-size 2048
     --flash-attn on
     --load-mode none

@@ -219,7 +219,7 @@ case "$BACKEND_CHOICE" in
             echo "   11) layer              — DFlash n2 — f16 — 128k  ( 743 pp /  31.7 tg; prefer ROCm) [L 1,1 · txt]"
               echo
               echo "  Qwen3.8-Flash-Next 125B-A6B  UD-IQ3_XXS (n-gram table on CPU)"
-              echo "   12) layer              — no spec  — q8_0 — 81920  (  50.9 pp /  42.99 tg) [L 38,62 · txt] ★NEW"
+              echo "   12) layer              — no spec  — q8_0 — 81920  ( 688 pp / 42.5 tg; 29.2 @d9k) [L 385,615 · txt] ★NEW"
             echo
             PRESET_CHOICE="$(prompt_choice "Preset (1-12): ")"
             case "$PRESET_CHOICE" in

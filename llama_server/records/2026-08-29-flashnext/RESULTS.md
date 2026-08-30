@@ -144,3 +144,48 @@ PLACEMENT matters hugely (Vulkan1 21.84 vs Vulkan0 8.14) but never enough.
 The iq3s-mmv-register-spill commit (d19f92093) targets exactly the IQ3_S mat-vec
 path this quant uses and was never evaluated -- it would need cherry-picking
 onto the qwen4exp tree. That is the most promising untried lead.
+
+## ROUND 3: prefill
+
+The "pp 50.9" figure reported earlier in this file was measured on a 20-token
+prompt and is startup overhead, not throughput. Re-measured on a 9,060-token
+prompt (src/benchmarks/prompts/ concatenated, 35,696 bytes):
+
+    ub  512  b 2048    pp 576.6   tg@9k 29.38
+    ub 1024  b 2048    pp 694.8   tg@9k 29.61   <- +20%, shipped
+    ub 2048  b 4096    pp  69.4   tg@9k  7.78   <- CLIFF
+    ub 2048  b16384    pp  69.2   tg@9k  7.76   <- CLIFF
+    ub 4096  b 8192    pp  70.6                 <- CLIFF
+
+Real prefill is ~690 t/s, not 50. For scale, community reports on this model:
+5070Ti+5060Ti 86.9 pp, AI MAX+ 395 145.7 pp, 2x4090D 1796 pp.
+
+### The R9700 is the binding constraint, not the XTX
+
+--tensor-split takes PROPORTIONS, not percentages, so sub-1% steps are legal.
+Layer assignment is discrete over 48 layers, so most fine steps quantise to the
+same placement (370,630 and 375,625 produced byte-identical VRAM).
+
+    ts        XTX    XTX margin   R9700   R97 margin   pp
+    38,62    23429          771   32491           76   699.1
+    370,630  23376          824   32490           77   691.1
+    375,625  23376          824   32490           77   690.2
+    385,615  23140         1060   32490           77   687.9   <- shipped
+    36,64    22006         2194   32446          121    67.0   <- CLIFF
+    35,65    21978         2222   32513           54    66.8   <- CLIFF
+
+The R9700 sits at 32,490 MiB in EVERY working configuration. Moving weight OFF
+the XTX does NOT increase safety -- it pushes the R9700 past its limit and falls
+off the cliff. The usable range is narrow and one-sided.
+
+385,615 buys 289 MiB of XTX headroom for 1.6% of prefill. That matters because
+the XTX drives the desktop, whose baseline was observed between 1,479 and
+3,525 MiB within a single day.
+
+### Shipped final
+
+    ctx 81920, ts 385,615, -ub 1024 -b 2048, q8_0 KV, --flash-attn on,
+    --load-mode none, -ot 'per_layer_token_embd\.weight=CPU',
+    --device Vulkan0,Vulkan1, GGML_VK_ALLOW_GRAPHICS_QUEUE=1
+    ==> pp 687.9   tg 42.5 @d0   tg 29.2 @d9060
+        XTX 23,140 MiB (1,060 margin)   R9700 32,490 MiB (77 margin)
