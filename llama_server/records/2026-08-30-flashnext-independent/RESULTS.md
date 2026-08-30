@@ -271,3 +271,11 @@ It also establishes a large shallow-decode penalty versus the approximately
 128-token suffix, but that suffix's stage-storage semantics have not yet been
 independently audited. Coherent short output is necessary, not sufficient, for
 a quality claim.
+
+Source audit after the probe found that `tail_stride` describes only the
+optional enlarged exact-tail arena. KVarN's always-present F16 stage buffers
+hold the live incomplete 128-token group; the native shader selects those
+stage rows before reading older completed groups from quantized records. Thus
+`tail_stride=0` is consistent with the intrinsic lossless suffix when no
+additional `--kv-tail-tokens` value is requested. This validates routing and
+the intended storage mechanism, but it is not a task-level quality evaluation.
