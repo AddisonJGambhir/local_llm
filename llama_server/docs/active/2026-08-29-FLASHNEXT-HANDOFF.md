@@ -1,3 +1,6 @@
+> **SUPERSEDED by `2026-08-29-FLASHNEXT-HANDOFF-2.md`.** The tg 9.14 numbers here
+> are stale (now 42.5) and the "SSD offload is a false premise" conclusion is wrong.
+
 # Handoff: Qwen3.8-Flash-Next decode is 2-5x slower here than it should be
 
 Written 2026-08-29 by the prior agent. **This work is unfinished and the prior
