@@ -36,6 +36,15 @@
 # pushes past the cliff at 81920 (measured tg 11.82). q8_0 is what makes 81920
 # reachable at full speed.
 #
+# WHY --load-mode mmap AND NOT none: `none` disables mmap, which loads the
+# 26.8 GiB PLE table as ANONYMOUS RAM that the kernel cannot evict. On a 64 GB
+# box that is enough on its own to OOM the machine if anything else is running,
+# and it DID -- it killed the user's running server and applications on
+# 2026-08-29. With mmap the table is paged from the NVMe file and the kernel
+# reclaims it under pressure. Measured cost of mmap is within noise
+# (independent 3-prompt replication: 15.48 vs 15.28, 16.88 vs 16.93,
+# 18.60 vs 18.40 t/s). NEVER ship --load-mode none with this model.
+#
 # WHY -ub 1024 (9,060-token prompt, ctx 81920):
 #   ub 512   pp 576.6      ub 2048/b4096   pp 69.4   <- CLIFF
 #   ub 1024  pp 694.8      ub 2048/b16384  pp 69.2   <- CLIFF
@@ -118,6 +127,6 @@ LLAMA_EXTRA_ARGS=(
     --tensor-split 385,615
     --batch-size 2048
     --flash-attn on
-    --load-mode none
+    --load-mode mmap
     -ot 'per_layer_token_embd\.weight=CPU'
 )
