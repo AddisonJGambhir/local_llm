@@ -279,3 +279,27 @@ stage rows before reading older completed groups from quantized records. Thus
 `tail_stride=0` is consistent with the intrinsic lossless suffix when no
 additional `--kv-tail-tokens` value is requested. This validates routing and
 the intended storage mechanism, but it is not a task-level quality evaluation.
+
+### KVarN 65,536-context placement probe
+
+Run directory: `/tmp/fn-sweep/kvarn65-independent-64k-probe`
+
+Changing only context from 16,384 to 65,536 produced:
+
+    warmup: 31.0097 t/s
+    one measured sample: 30.7229 t/s
+    settled R9700/XTX: 30,701 / 24,123 MiB
+    RSS: 261,200 KiB
+
+The XTX had only 77 MiB left under the 24,200 MiB guard ceiling. Aggregate
+VRAM grew by 1,309 MiB over 49,152 additional context tokens, or about 26.6
+KiB/token. Extrapolation is not a launch authorization, but it does establish
+a capacity impossibility: another 114,688 tokens to reach 180K would require
+about 2,984 MiB at the measured slope, while only 976 MiB remains under the two
+guard ceilings combined. Even the cards' absolute physical capacity provides
+only about 2,360 MiB above this 64K allocation.
+
+Therefore IQ3_XXS plus all experts in VRAM plus 180K context cannot fit on
+these cards with this K6/V5 implementation. Reaching 180K requires freeing
+other model allocation from VRAM, using a smaller body quant, or violating the
+physical capacity; layer rebalancing alone cannot change the aggregate.
