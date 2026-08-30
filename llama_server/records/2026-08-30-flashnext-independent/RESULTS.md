@@ -374,3 +374,35 @@ The placement adds 1.46% over the fused 400/600 median and 9.16% over the
 original unpatched 400/600 control. It does not establish 50 t/s. The XTX has
 only 544 MiB of guard margin at 49K, so this split cannot be assumed usable at
 high context without reallocating KV or model layers.
+
+### Sampler-chain probes: no route to 50 t/s
+
+At the fused 425/575 placement, replacing the request's greedy top-k path with
+`top_p;min_p;temperature` forced filtering over the full vocabulary and fell
+to a 46.3281 t/s median. `top_k;temperature` measured 49.0762 t/s, effectively
+equal to and slightly below the 49.1566 default-chain median. Sampler changes
+do not close the remaining shallow-decode gap.
+
+### Real 8,948-token A/B: 1,044 pp and 38.59 deep tg
+
+Patched run: `/tmp/fn-sweep/vulkan-fusions-skinny-radix-q2-depth9k-ignoreeos`
+
+Control run: `/tmp/fn-sweep/upstream-q2-depth9k-ignoreeos-control`
+
+The patched build adds the validated Vulkan fusion pair, the main-model parts
+of `b6d995d5` (copy-free stream pooling and skinny inject mat-vec for prefill),
+and only the Vulkan backend portion of radix TOP_K `233c0d9c`. The regressive
+branch's QSA gather/cache rewrites and MTP graph are absent. Both runs used the
+same 35,000-character slice of `/tmp/bigprompt-200k.txt`, producing 8,948
+prompt tokens, Q2 body, Q8_0 K/V, context 16,384, ubatch 1,024, split 425/575,
+128 forced decode tokens, mmap lazy loading, and identical greedy sampling.
+
+    patched: 1044.0525 pp, 38.5933 tg at depth, R9700/XTX 27,492/23,579 MiB
+    upstream: 725.9201 pp, 29.9749 tg at depth, R9700/XTX 27,470/23,479 MiB
+
+The combined stack improves real-prompt prefill by 43.83% and decode at 9K
+live depth by 28.75% in this exact one-pass A/B. Both generated all 128 tokens;
+the patched continuation was coherent and recognized the synthetic repetition,
+while the control fell into repetitive continuation. This establishes a large
+stack-level win, not yet attribution among the three changes. The patched
+1,044 pp result clears the 600 pp target at this measured depth.
