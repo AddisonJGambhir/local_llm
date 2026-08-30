@@ -33,7 +33,7 @@ PROMPT_CHARS="${FN_PROMPT_CHARS:-0}"
 CURL_TIMEOUT="${FN_CURL_TIMEOUT:-600}"
 IGNORE_EOS="${FN_IGNORE_EOS:-false}"
 MEM_NEED="${FN_MEM_NEED:-30}"
-R9700_MAX="${R9700_MAX:-32200}"
+R9700_MAX="${R9700_MAX:-32500}"
 XTX_MAX="${XTX_MAX:-24200}"
 MEM_MIN="${MEM_MIN:-6}"
 
@@ -102,7 +102,8 @@ echo "CONFIG tag=$TAG ctx=$CTX ub=$UB ts=$TS kv=$CTK/$CTV load=$LOADMODE threads
 echo "CONFIG bin=$BIN run=$RUN"
 GGML_VK_ALLOW_GRAPHICS_QUEUE=1 "$BIN" "${args[@]}" >"$LOG" 2>&1 &
 PID=$!
-GUARD_LOG="$RUN/guard.log" R9700_MAX="$R9700_MAX" XTX_MAX="$XTX_MAX" MEM_MIN="$MEM_MIN" \
+rm -f "$RUN/ready"
+GUARD_LOG="$RUN/guard.log" R9700_MAX="$R9700_MAX" XTX_MAX="$XTX_MAX" MEM_MIN="$MEM_MIN" READY_FILE="$RUN/ready" \
     "$GUARD" "$PID" &
 GUARD_PID=$!
 echo "LAUNCHED pid=$PID guard_pid=$GUARD_PID"
@@ -117,6 +118,7 @@ for ((i = 0; i < 420; ++i)); do
     fi
     if curl -sf --max-time 2 "http://127.0.0.1:$PORT/health" >/dev/null; then
         ready=1
+        touch "$RUN/ready"
         break
     fi
     sleep 1
@@ -144,6 +146,7 @@ else
         >"$request"
 fi
 
+settled_note=""
 declare -a measured=()
 total_passes=$(( MEASURED_PASSES + WARMUP_PASSES ))
 for ((pass = 1; pass <= total_passes; ++pass)); do

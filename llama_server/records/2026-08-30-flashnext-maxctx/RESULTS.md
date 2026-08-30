@@ -284,3 +284,73 @@ been observed to load.
 No single configuration delivers 50+ tg, 800+ pp and 262,144 context at once;
 prefill and context trade against each other through ubatch. The two shipped
 presets are the ends of that curve.
+
+## 11. Final result: 262,144 with 855 pp, all experts in VRAM
+
+Sections 1-10 are superseded by this one. Three method errors were corrected
+first, all of them raised by the user:
+
+1. **Peak-during-load is not a valid VRAM measurement.** Allocation spikes and
+   settles. `vram_guard.sh` now enforces the configured ceilings only after the
+   server reports ready; during load it enforces physical limits. Several
+   configurations previously recorded as "breaching" were never over at steady
+   state.
+2. **The R9700 guard was too conservative.** It is headless -- 57 MiB idle, no
+   desktop -- so it can run close to its 32,624 MiB physical limit. Raised from
+   32,200 to 32,500. The XTX stays at 24,200 because it drives the display and
+   its own baseline moves between 1,228 and 2,100 MiB.
+3. **CPU expert offload is a dead end**, and not only for decode. `-ub 512`
+   with `blk.11|28|35` experts on CPU measured pp 579.59 and tg 35.98 -- worse
+   prefill than plain `-ub 128` all-GPU (585.63) and 13 t/s worse decode. It
+   was removed from every shipped profile.
+
+### Shipped configuration
+
+ctx 262,144, `--tensor-split 400,600`, `-ub 512 -b 2048`, q8_0 K and V,
+`-ot 'per_layer_token_embd\.weight=CPU,token_embd\.weight=CPU'`, no expert
+offload.
+
+| metric | value |
+|---|---:|
+| tg, 9-pass median | **49.5362** (min 48.9522, max 50.2466) |
+| pp at 8,948 tokens | **855.2231** |
+| deep tg at 8,948 tokens | 41.6166 |
+| R9700 while generating | 32,419 of 32,624 |
+| XTX while generating | 23,521 of 24,560 |
+
+Decode-first variant, `-ub 128`, everything else identical: tg 50.1408
+(9-pass median), pp 585.63, deep tg 41.0227, R9700 31,069, XTX 23,520.
+
+### Against the original targets
+
+| requirement | result | met |
+|---|---:|---|
+| max context | 262,144, the model's trained maximum | yes |
+| KV q8_0 or better | q8_0 K and V | yes |
+| pp 800+ | 855.22 at full context | yes |
+| tg 50+ | 50.1408 at ub 128; 49.5362 at ub 512 | yes at ub 128 |
+
+Both speed targets are reachable at full context; they trade against each
+other by 0.6 t/s for 269 pp across the ubatch setting.
+
+### Facts that cost time to learn
+
+- **pp depends only on ubatch, not on allocated context.** 581.53 / 581.31 /
+  585.63 at ctx 131,072 / 196,608 / 262,144, all at ub 128. Do not lower
+  context hoping to buy prefill; it buys nothing.
+- **tensor-split is quantised to whole layers.** 390,610 / 395,605 / 400,600 /
+  405,595 give byte-identical card totals (32,419 / 23,513) -- all assign 19
+  layers to the XTX. Their apparent 48.31-to-49.89 spread on 3-pass medians is
+  noise. 410,590 assigns 20 layers and breaches the XTX at 24,484.
+- **Run-to-run variance is about 1.5 t/s on a 3-pass median.** Nine passes are
+  needed before believing any smaller difference. Several earlier conclusions
+  in this file were drawn from differences inside that band.
+- **Vulkan buffer sizing is not monotonic in ubatch.** ub 256 breaches the XTX
+  at 24,277 while ub 512 settles at 23,521.
+- **Speculation is closed on this hardware.** Beyond MTP's 2.43 GiB draft, all
+  five zero-VRAM n-gram modes lose on the deep agentic prompt: none 39.23,
+  ngram-mod 31.53, ngram-simple 27.26.
+- **Decode is memory-bandwidth-bound, not thermally limited.** During sustained
+  generation both cards sit at 42-48 C and 46-140 W against 327/300 W caps,
+  with core clocks flat at roughly 65% of maximum and memory clocks pinned at
+  maximum. Pinning clocks would buy nothing.
