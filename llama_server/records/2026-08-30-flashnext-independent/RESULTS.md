@@ -102,3 +102,31 @@ These aggregates contain many invocations and are not single-kernel latency.
 They show that both quantized expert mat-vec work and graph/kernel multiplicity
 are live optimization targets. They do not support dismissing memory/quant
 work on the basis of a host-overhead arithmetic estimate.
+
+## IQ3_XXS guarded baseline: Q8 KV, 16,384 context
+
+Run directory: `/tmp/fn-sweep/iq3xxs-independent-16k`
+
+The downloaded `UD-IQ3_XXS` model was loaded from its first shard using the
+same build, placement, Q8 KV, mmap PLE override, prompt, and four-pass protocol
+as the Q2 baseline. Context was deliberately started at 16,384 because this
+larger body leaves little R9700 margin.
+
+Raw decode samples:
+
+    warmup: 42.1638 t/s
+    measured: 42.1791, 42.5570, 42.7968 t/s
+    median: 42.5570 t/s
+    spread: 0.6178 t/s
+
+Settled resources after the fourth request:
+
+    R9700 (sysfs card0): 31,225 MiB
+    XTX (sysfs card1):   22,533 MiB
+    process RSS:            986,584 KiB
+
+The guard recorded no breach and output was coherent. The R9700 had only 375
+MiB of margin under the conservative 31,600 MiB ceiling, so larger-context
+steps must remain guarded and incremental. This establishes the model's real
+small-context baseline but is not yet an apples-to-apples speed comparison
+with the 49,152-context Q2 measurement.
