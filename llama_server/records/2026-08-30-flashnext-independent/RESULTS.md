@@ -130,3 +130,22 @@ MiB of margin under the conservative 31,600 MiB ceiling, so larger-context
 steps must remain guarded and incremental. This establishes the model's real
 small-context baseline but is not yet an apples-to-apples speed comparison
 with the 49,152-context Q2 measurement.
+
+### Rejected 49,152-context step at the same split
+
+Run directory: `/tmp/fn-sweep/iq3xxs-independent-49k`
+
+Raising only context to 49,152 was unsafe at the 385/615 layer split. The run
+completed its warmup and two measured requests, then the guard observed the
+same over-ceiling R9700 allocation three times at five-second intervals:
+
+    11:36:55 R9700 32,079 MiB, XTX 23,179 MiB, breach 1/3
+    11:37:00 R9700 32,079 MiB, XTX 23,215 MiB, breach 2/3
+    11:37:05 R9700 32,079 MiB, XTX 23,189 MiB, breach 3/3; killed
+
+The partial generation rates were 44.3229 and 44.5429 t/s, but this is not a
+valid completed benchmark and those numbers must not be promoted as a median.
+The failure establishes that context growth and/or its compute buffers added
+about 854 MiB to the R9700 versus the 16K settled snapshot, exceeding the
+31,600 MiB ceiling by 479 MiB. A larger context requires different placement,
+not merely assuming the 16K margin scales gently.
