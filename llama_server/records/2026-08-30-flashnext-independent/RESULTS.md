@@ -149,3 +149,19 @@ The failure establishes that context growth and/or its compute buffers added
 about 854 MiB to the R9700 versus the 16K settled snapshot, exceeding the
 31,600 MiB ceiling by 479 MiB. A larger context requires different placement,
 not merely assuming the 16K margin scales gently.
+
+### Layer-placement probe: 400/600 at 16,384 context
+
+Run directory: `/tmp/fn-sweep/iq3xxs-split40-16k-probe`
+
+A short one-warmup, one-sample probe changed only the layer split from 385/615
+to 400/600. Settled placement changed from 31,225/22,533 MiB to:
+
+    R9700 (sysfs card0): 30,158 MiB  (-1,067 MiB)
+    XTX (sysfs card1):   23,619 MiB  (+1,086 MiB)
+
+This confirms that the ratio crossed a discrete approximately one-layer
+placement boundary. It gives the R9700 ample room but leaves only 581 MiB under
+the guarded XTX ceiling before increasing context. The lone 128-token measured
+sample was 44.2001 t/s; it is a placement probe, not a comparable throughput
+result.
