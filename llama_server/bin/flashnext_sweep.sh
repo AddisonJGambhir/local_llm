@@ -27,6 +27,10 @@ TAG="${FN_TAG:-untagged}"
 PORT="${FN_PORT:-18253}"
 NPRED="${FN_NPRED:-256}"
 MEASURED_PASSES="${FN_PASSES:-3}"
+WARMUP_PASSES="${FN_WARMUP_PASSES:-1}"
+PROMPT_FILE="${FN_PROMPT_FILE:-}"
+PROMPT_CHARS="${FN_PROMPT_CHARS:-0}"
+CURL_TIMEOUT="${FN_CURL_TIMEOUT:-600}"
 MEM_NEED="${FN_MEM_NEED:-30}"
 R9700_MAX="${R9700_MAX:-31600}"
 XTX_MAX="${XTX_MAX:-24200}"
@@ -122,26 +126,40 @@ if (( ready == 0 )); then
 fi
 
 request="$RUN/request.json"
-jq -n --arg prompt 'Write three sentences about why memory bandwidth matters for language model inference.' \
-    --argjson n_predict "$NPRED" \
-    '{prompt:$prompt,n_predict:$n_predict,temperature:0,top_k:1,seed:42,stream:false,cache_prompt:false}' \
-    >"$request"
+if [[ -n "$PROMPT_FILE" ]]; then
+    if [[ ! -r "$PROMPT_FILE" ]]; then
+        echo "ABORT: prompt file is not readable: $PROMPT_FILE"
+        exit 27
+    fi
+    jq -n --rawfile prompt "$PROMPT_FILE" \
+        --argjson prompt_chars "$PROMPT_CHARS" \
+        --argjson n_predict "$NPRED" \
+        '{prompt:(if $prompt_chars > 0 then $prompt[0:$prompt_chars] else $prompt end),n_predict:$n_predict,temperature:0,top_k:1,seed:42,stream:false,cache_prompt:false}' \
+        >"$request"
+else
+    jq -n --arg prompt 'Write three sentences about why memory bandwidth matters for language model inference.' \
+        --argjson n_predict "$NPRED" \
+        '{prompt:$prompt,n_predict:$n_predict,temperature:0,top_k:1,seed:42,stream:false,cache_prompt:false}' \
+        >"$request"
+fi
 
 declare -a measured=()
-total_passes=$(( MEASURED_PASSES + 1 ))
+total_passes=$(( MEASURED_PASSES + WARMUP_PASSES ))
 for ((pass = 1; pass <= total_passes; ++pass)); do
     output="$RUN/out${pass}.json"
-    if ! curl -sf --max-time 600 "http://127.0.0.1:$PORT/completion" \
+    if ! curl -sf --max-time "$CURL_TIMEOUT" "http://127.0.0.1:$PORT/completion" \
             -H 'Content-Type: application/json' --data-binary @"$request" >"$output"; then
         echo "RESULT tag=$TAG status=completion_failed pass=$pass"
         tail -20 "$RUN/guard.log" 2>/dev/null || true
         exit 26
     fi
     tg=$(jq -r '.timings.predicted_per_second' "$output")
-    if (( pass == 1 )); then
-        echo "PASS $pass warmup_tg=$tg"
+    pp=$(jq -r '.timings.prompt_per_second' "$output")
+    prompt_n=$(jq -r '.timings.prompt_n' "$output")
+    if (( pass <= WARMUP_PASSES )); then
+        echo "PASS $pass warmup_pp=$pp prompt_n=$prompt_n warmup_tg=$tg"
     else
-        echo "PASS $pass measured_tg=$tg"
+        echo "PASS $pass measured_pp=$pp prompt_n=$prompt_n measured_tg=$tg"
         measured+=( "$tg" )
     fi
 done
