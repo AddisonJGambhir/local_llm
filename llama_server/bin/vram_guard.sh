@@ -13,7 +13,7 @@ fi
 
 PID="$1"
 XTX_MAX="${XTX_MAX:-24200}"
-R9700_MAX="${R9700_MAX:-32000}"
+R9700_MAX="${R9700_MAX:-32200}"
 MEM_MIN="${MEM_MIN:-6}"
 LOG="${GUARD_LOG:-/tmp/vram_guard.log}"
 strikes=0
