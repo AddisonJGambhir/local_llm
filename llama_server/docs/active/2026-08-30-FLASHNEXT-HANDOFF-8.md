@@ -1,3 +1,17 @@
+> **NUMBERS IN THIS FILE ARE STALE.** They were measured before three method
+> errors were corrected (peak-during-load is not a valid VRAM reading; the
+> headless R9700 guard was too tight at 32,200; CPU expert offload hurts
+> prefill as well as decode). The authoritative result is
+> `llama_server/records/2026-08-30-flashnext-maxctx/RESULTS.md` **section 11**,
+> and the shipped config is
+> `llama_server/config/profiles/preset-flashnext-q2kxl-vulkan-fusions-262k.sh`.
+>
+> Final: ctx **262,144**, ts 400,600, `-ub 512`, q8_0 K/V, every expert in
+> VRAM -> tg **49.5362** (9-pass median), pp **855.2231**, deep tg 41.6166,
+> R9700 32,419/32,624 and XTX 23,521/24,560 while generating. A `-ub 128`
+> variant gives tg **50.1408** / pp 585.63. Sections 1-7 below are kept only
+> for the hardware, guard and worktree rules.
+
 # Handoff 8: 262,144 context reached and shipped; 50+ tg not reached
 
 Supersedes `2026-08-30-FLASHNEXT-HANDOFF-7.md`. Handoff 7's hardware notes,
