@@ -303,3 +303,32 @@ Therefore IQ3_XXS plus all experts in VRAM plus 180K context cannot fit on
 these cards with this K6/V5 implementation. Reaching 180K requires freeing
 other model allocation from VRAM, using a smaller body quant, or violating the
 physical capacity; layer rebalancing alone cannot change the aggregate.
+
+## Vulkan-focused Qwen branch: full stack regresses decode
+
+Candidate binary: apepojken `qwen4exp-spec-mtp` at `843d5750`
+
+The candidate branch does not implement `--tensor-read-lazy`, so its first
+launch rejected that argument before allocating the model. The valid candidate
+run and a fresh upstream control therefore both used ordinary mmap with the
+lazy-row argument omitted. All other runtime settings were identical: Q2 body,
+49,152 context, Q8_0 K/V, split 400/600, ubatch 512, PLE on CPU, one warmup,
+three measured 256-token generations, and MTP disabled.
+
+    candidate run: /tmp/fn-sweep/vulkan-mtpbranch-q2-nomtp-49k
+    candidate warmup: 35.3449 t/s
+    candidate measured: 37.2606, 39.3025, 40.3193 t/s
+    candidate median: 39.3025 t/s
+    candidate R9700/XTX: 28,476 / 22,475 MiB
+
+    upstream run: /tmp/fn-sweep/upstream-q2-nolazy-49k
+    upstream warmup: 46.4823 t/s
+    upstream measured: 45.2012, 45.3681, 46.4159 t/s
+    upstream median: 45.3681 t/s
+    upstream R9700/XTX: 28,755 / 22,715 MiB
+
+The bundled Vulkan/Qwen/MTP branch is 13.37% slower by median in this exact
+no-MTP control. Its rising candidate passes make the exact regression size
+somewhat warmup-sensitive, but even its best measured pass remains 10.7% below
+the upstream median. Do not adopt the full branch. Any promising Vulkan fusion
+commits must be isolated on the known-good `aa1b06d0c` base.
