@@ -1,3 +1,5 @@
+> SUPERSEDED by `2026-08-30-FLASHNEXT-HANDOFF-8.md` (262,144 context reached and shipped). Kept for its hardware, guard and worktree rules, which still apply.
+
 # Handoff 7: independently verified Vulkan gains; MTP sidecar is incompatible
 
 Supersedes `2026-08-30-FLASHNEXT-HANDOFF-6.md`. Treat all earlier handoffs as

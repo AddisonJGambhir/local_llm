@@ -31,6 +31,7 @@ WARMUP_PASSES="${FN_WARMUP_PASSES:-1}"
 PROMPT_FILE="${FN_PROMPT_FILE:-}"
 PROMPT_CHARS="${FN_PROMPT_CHARS:-0}"
 CURL_TIMEOUT="${FN_CURL_TIMEOUT:-600}"
+IGNORE_EOS="${FN_IGNORE_EOS:-false}"
 MEM_NEED="${FN_MEM_NEED:-30}"
 R9700_MAX="${R9700_MAX:-32200}"
 XTX_MAX="${XTX_MAX:-24200}"
@@ -133,13 +134,13 @@ if [[ -n "$PROMPT_FILE" ]]; then
     fi
     jq -n --rawfile prompt "$PROMPT_FILE" \
         --argjson prompt_chars "$PROMPT_CHARS" \
-        --argjson n_predict "$NPRED" \
-        '{prompt:(if $prompt_chars > 0 then $prompt[0:$prompt_chars] else $prompt end),n_predict:$n_predict,temperature:0,top_k:1,seed:42,stream:false,cache_prompt:false}' \
+        --argjson n_predict "$NPRED" --argjson ignore_eos "$IGNORE_EOS" \
+        '{prompt:(if $prompt_chars > 0 then $prompt[0:$prompt_chars] else $prompt end),n_predict:$n_predict,temperature:0,top_k:1,seed:42,stream:false,cache_prompt:false,ignore_eos:$ignore_eos}' \
         >"$request"
 else
     jq -n --arg prompt 'Write three sentences about why memory bandwidth matters for language model inference.' \
-        --argjson n_predict "$NPRED" \
-        '{prompt:$prompt,n_predict:$n_predict,temperature:0,top_k:1,seed:42,stream:false,cache_prompt:false}' \
+        --argjson n_predict "$NPRED" --argjson ignore_eos "$IGNORE_EOS" \
+        '{prompt:$prompt,n_predict:$n_predict,temperature:0,top_k:1,seed:42,stream:false,cache_prompt:false,ignore_eos:$ignore_eos}' \
         >"$request"
 fi
 
