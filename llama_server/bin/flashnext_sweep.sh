@@ -153,11 +153,14 @@ card1_gtt_ready=$(( $(< /sys/class/drm/card1/device/mem_info_gtt_used) / 1048576
 echo "READY card0=${card0_ready}MiB card1=${card1_ready}MiB card0_gtt=${card0_gtt_ready}MiB card1_gtt=${card1_gtt_ready}MiB gtt_delta=$((card0_gtt_ready + card1_gtt_ready - card0_gtt_pre - card1_gtt_pre))MiB"
 
 telemetry="$RUN/gpu-memory.tsv"
-printf 'epoch\tcard0_vram_mib\tcard1_vram_mib\tcard0_gtt_mib\tcard1_gtt_mib\n' >"$telemetry"
+printf 'epoch\tn_prompt_tokens\tcard0_vram_mib\tcard1_vram_mib\tcard0_gtt_mib\tcard1_gtt_mib\n' >"$telemetry"
 (
     while kill -0 "$PID" 2>/dev/null; do
-        printf '%s\t%d\t%d\t%d\t%d\n' \
+        slot_tokens=$(curl -sf --max-time 1 "http://127.0.0.1:$PORT/slots" 2>/dev/null \
+            | jq -r '.[0].n_prompt_tokens // 0' 2>/dev/null || printf '%s' -1)
+        printf '%s\t%s\t%d\t%d\t%d\t%d\n' \
             "$(date +%s)" \
+            "$slot_tokens" \
             "$(( $(< /sys/class/drm/card0/device/mem_info_vram_used) / 1048576 ))" \
             "$(( $(< /sys/class/drm/card1/device/mem_info_vram_used) / 1048576 ))" \
             "$(( $(< /sys/class/drm/card0/device/mem_info_gtt_used) / 1048576 ))" \

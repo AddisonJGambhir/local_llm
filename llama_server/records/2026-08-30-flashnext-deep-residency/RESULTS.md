@@ -129,3 +129,45 @@ That remains well over 128K while freeing KV allocation. If the 92-94K cliff
 moves or disappears, allocation headroom is the immediate lever. If it stays
 at the same live depth, investigate Vulkan buffer residency and tensor-parallel
 patches rather than further split or ubatch guessing.
+
+## 200K populated-context frontier
+
+The next experiments read the entire `/tmp/bigprompt-200k.txt` rather than a
+slice. The tokenizer reported `prompt_n = 199,320`; each successful run then
+generated 256 tokens. Every result below used split 375,625, Q8_0 K/V, every
+expert in VRAM, and explicit `--spec-type none`.
+
+| allocated ctx | ub | result at 199,320 live prompt tokens |
+|---:|---:|---|
+| 212,992 | 128 | **338.9899 pp / 13.4109 tg**, clean |
+| 212,992 | 256 | migration late in prefill; guard killed |
+| 200,704 | 256 | migration late in prefill; guard killed |
+| 200,704 | 192 | **347.2632 pp / 13.0885 tg**, clean |
+
+Run directories:
+
+```text
+/tmp/fn-sweep/deep200k-ctx213k-ts375-ub128-none
+/tmp/fn-sweep/deep200k-ctx213k-ts375-ub256-none
+/tmp/fn-sweep/deep200k-ctx200704-ts375-ub256-none
+/tmp/fn-sweep/deep200k-ctx200704-ts375-ub192-none
+```
+
+The ub128 run remained resident throughout. Its telemetry ranged only
+31,732-31,738 MiB R9700 VRAM, 22,282-22,533 MiB XTX VRAM, 19-45 MiB R9700
+GTT, and 1,753-1,928 MiB XTX GTT. Net GTT growth from ready was 9 MiB.
+
+Both ub256 runs were faster until they failed, but each reproduced the same
+R9700 migration signature late in the prompt: roughly 1.0-1.1 GiB VRAM lost
+while roughly 0.8-0.9 GiB appeared in GTT. Reducing unused context allocation
+by 12,288 tokens freed about 200 MiB on the R9700 and did not prevent the
+migration. Therefore ub256 itself is not safe for a populated 200K request.
+
+Ub192 completed cleanly and improved pp by only 2.4%, while tg fell by 2.4%
+and safety margin shrank. Ub128 remains the better all-round production
+choice; ub192 is a minor prefill-first alternative.
+
+The guard now detects the actual migration pattern after ready: a correlated
+512 MiB VRAM loss plus 512 MiB GTT rise, sustained for three five-second
+samples. This deliberately ignores an initially high but stable GTT footprint.
+Telemetry now includes exact `n_prompt_tokens` at each sample.
