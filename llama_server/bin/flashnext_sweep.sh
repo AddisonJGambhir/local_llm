@@ -30,6 +30,10 @@ MEASURED_PASSES="${FN_PASSES:-3}"
 WARMUP_PASSES="${FN_WARMUP_PASSES:-1}"
 PROMPT_FILE="${FN_PROMPT_FILE:-}"
 PROMPT_CHARS="${FN_PROMPT_CHARS:-0}"
+MIN_PROMPT_TOKENS="${FN_MIN_PROMPT_TOKENS:-10000}"
+ALLOW_SHALLOW="${FN_ALLOW_SHALLOW:-0}"
+SPEC_TYPE="${FN_SPEC_TYPE:-none}"
+LOG_VERBOSITY="${FN_LOG_VERBOSITY:-2}"
 CURL_TIMEOUT="${FN_CURL_TIMEOUT:-600}"
 IGNORE_EOS="${FN_IGNORE_EOS:-false}"
 MEM_NEED="${FN_MEM_NEED:-30}"
@@ -41,9 +45,14 @@ RUN="${FN_RUN:-/tmp/fn-sweep/$TAG}"
 LOG="$RUN/server.log"
 PID=
 GUARD_PID=
+TELEMETRY_PID=
 mkdir -p "$RUN"
 
 cleanup() {
+    if [[ -n "${TELEMETRY_PID:-}" ]] && kill -0 "$TELEMETRY_PID" 2>/dev/null; then
+        kill "$TELEMETRY_PID" 2>/dev/null || true
+        wait "$TELEMETRY_PID" 2>/dev/null || true
+    fi
     if [[ -n "${GUARD_PID:-}" ]] && kill -0 "$GUARD_PID" 2>/dev/null; then
         kill "$GUARD_PID" 2>/dev/null || true
         wait "$GUARD_PID" 2>/dev/null || true
@@ -61,6 +70,12 @@ if pgrep -x llama-server >/dev/null; then
     exit 20
 fi
 
+if [[ -z "$PROMPT_FILE" && "$ALLOW_SHALLOW" != "1" ]]; then
+    echo "ABORT: FN_PROMPT_FILE is required; valid performance tests must reach at least ${MIN_PROMPT_TOKENS} live tokens"
+    echo "Set FN_ALLOW_SHALLOW=1 only for an explicitly labelled diagnostic."
+    exit 28
+fi
+
 echo "PRECHECK listeners"
 ss -ltnp | grep -E ":(1234|8080|${PORT})[[:space:]]" || true
 if ss -ltn | grep -qE ":(1234|${PORT})[[:space:]]"; then
@@ -76,7 +91,9 @@ fi
 
 card0_pre=$(( $(< /sys/class/drm/card0/device/mem_info_vram_used) / 1048576 ))
 card1_pre=$(( $(< /sys/class/drm/card1/device/mem_info_vram_used) / 1048576 ))
-echo "PRECHECK card0=${card0_pre}MiB card1=${card1_pre}MiB MemAvailable=${available_gib}GiB"
+card0_gtt_pre=$(( $(< /sys/class/drm/card0/device/mem_info_gtt_used) / 1048576 ))
+card1_gtt_pre=$(( $(< /sys/class/drm/card1/device/mem_info_gtt_used) / 1048576 ))
+echo "PRECHECK card0=${card0_pre}MiB card1=${card1_pre}MiB card0_gtt=${card0_gtt_pre}MiB card1_gtt=${card1_gtt_pre}MiB MemAvailable=${available_gib}GiB"
 if (( card0_pre > R9700_MAX || card1_pre > XTX_MAX )); then
     echo "ABORT: a GPU is already above the guard ceiling"
     exit 23
@@ -88,8 +105,9 @@ args=(
     -ub "$UB" -b "$BATCH" --flash-attn on
     --cache-type-k "$CTK" --cache-type-v "$CTV"
     --load-mode "$LOADMODE" -ot "$OT"
+    --spec-type "$SPEC_TYPE"
     --host 127.0.0.1 --port "$PORT" --parallel 1
-    --fit off --log-verbosity 2
+    --fit off --log-verbosity "$LOG_VERBOSITY"
 )
 [[ "$LAZY" != "skip" ]] && args+=( --tensor-read-lazy "$LAZY" )
 [[ "$NGL" != "skip" ]] && args+=( -ngl "$NGL" )
@@ -98,7 +116,7 @@ args=(
 # shellcheck disable=SC2206
 [[ -n "$EXTRA" ]] && args+=( $EXTRA )
 
-echo "CONFIG tag=$TAG ctx=$CTX ub=$UB ts=$TS kv=$CTK/$CTV load=$LOADMODE threads=${THREADS:-default}"
+echo "CONFIG tag=$TAG ctx=$CTX ub=$UB ts=$TS kv=$CTK/$CTV load=$LOADMODE spec=$SPEC_TYPE threads=${THREADS:-default} min_prompt_tokens=$MIN_PROMPT_TOKENS"
 echo "CONFIG bin=$BIN run=$RUN"
 GGML_VK_ALLOW_GRAPHICS_QUEUE=1 "$BIN" "${args[@]}" >"$LOG" 2>&1 &
 PID=$!
@@ -127,6 +145,28 @@ if (( ready == 0 )); then
     echo "RESULT tag=$TAG status=load_timeout"
     exit 25
 fi
+
+card0_ready=$(( $(< /sys/class/drm/card0/device/mem_info_vram_used) / 1048576 ))
+card1_ready=$(( $(< /sys/class/drm/card1/device/mem_info_vram_used) / 1048576 ))
+card0_gtt_ready=$(( $(< /sys/class/drm/card0/device/mem_info_gtt_used) / 1048576 ))
+card1_gtt_ready=$(( $(< /sys/class/drm/card1/device/mem_info_gtt_used) / 1048576 ))
+echo "READY card0=${card0_ready}MiB card1=${card1_ready}MiB card0_gtt=${card0_gtt_ready}MiB card1_gtt=${card1_gtt_ready}MiB gtt_delta=$((card0_gtt_ready + card1_gtt_ready - card0_gtt_pre - card1_gtt_pre))MiB"
+
+telemetry="$RUN/gpu-memory.tsv"
+printf 'epoch\tcard0_vram_mib\tcard1_vram_mib\tcard0_gtt_mib\tcard1_gtt_mib\n' >"$telemetry"
+(
+    while kill -0 "$PID" 2>/dev/null; do
+        printf '%s\t%d\t%d\t%d\t%d\n' \
+            "$(date +%s)" \
+            "$(( $(< /sys/class/drm/card0/device/mem_info_vram_used) / 1048576 ))" \
+            "$(( $(< /sys/class/drm/card1/device/mem_info_vram_used) / 1048576 ))" \
+            "$(( $(< /sys/class/drm/card0/device/mem_info_gtt_used) / 1048576 ))" \
+            "$(( $(< /sys/class/drm/card1/device/mem_info_gtt_used) / 1048576 ))" \
+            >>"$telemetry"
+        sleep "${FN_TELEMETRY_INTERVAL:-5}"
+    done
+) &
+TELEMETRY_PID=$!
 
 request="$RUN/request.json"
 if [[ -n "$PROMPT_FILE" ]]; then
@@ -160,10 +200,17 @@ for ((pass = 1; pass <= total_passes; ++pass)); do
     tg=$(jq -r '.timings.predicted_per_second' "$output")
     pp=$(jq -r '.timings.prompt_per_second' "$output")
     prompt_n=$(jq -r '.timings.prompt_n' "$output")
+    pass_card0_gtt=$(( $(< /sys/class/drm/card0/device/mem_info_gtt_used) / 1048576 ))
+    pass_card1_gtt=$(( $(< /sys/class/drm/card1/device/mem_info_gtt_used) / 1048576 ))
+    pass_gtt_delta=$((pass_card0_gtt + pass_card1_gtt - card0_gtt_ready - card1_gtt_ready))
+    if [[ "$ALLOW_SHALLOW" != "1" ]] && (( prompt_n < MIN_PROMPT_TOKENS )); then
+        echo "RESULT tag=$TAG status=invalid_shallow pass=$pass prompt_n=$prompt_n required=$MIN_PROMPT_TOKENS"
+        exit 29
+    fi
     if (( pass <= WARMUP_PASSES )); then
-        echo "PASS $pass warmup_pp=$pp prompt_n=$prompt_n warmup_tg=$tg"
+        echo "PASS $pass warmup_pp=$pp prompt_n=$prompt_n warmup_tg=$tg gtt_since_ready=${pass_gtt_delta}MiB"
     else
-        echo "PASS $pass measured_pp=$pp prompt_n=$prompt_n measured_tg=$tg"
+        echo "PASS $pass measured_pp=$pp prompt_n=$prompt_n measured_tg=$tg gtt_since_ready=${pass_gtt_delta}MiB"
         measured+=( "$tg" )
     fi
 done
@@ -181,5 +228,7 @@ spread=$(awk -v lo="$minimum" -v hi="$maximum" 'BEGIN { printf "%.6f", hi-lo }')
 
 card0=$(( $(< /sys/class/drm/card0/device/mem_info_vram_used) / 1048576 ))
 card1=$(( $(< /sys/class/drm/card1/device/mem_info_vram_used) / 1048576 ))
+card0_gtt=$(( $(< /sys/class/drm/card0/device/mem_info_gtt_used) / 1048576 ))
+card1_gtt=$(( $(< /sys/class/drm/card1/device/mem_info_gtt_used) / 1048576 ))
 rss_kib=$(awk '/VmRSS:/ {print $2}' "/proc/$PID/status")
-echo "RESULT tag=$TAG status=ok tg_median=$median tg_min=$minimum tg_max=$maximum tg_spread=$spread card0=${card0}MiB card1=${card1}MiB rss_kib=$rss_kib"
+echo "RESULT tag=$TAG status=ok tg_median=$median tg_min=$minimum tg_max=$maximum tg_spread=$spread card0=${card0}MiB card1=${card1}MiB card0_gtt=${card0_gtt}MiB card1_gtt=${card1_gtt}MiB gtt_delta=$((card0_gtt + card1_gtt - card0_gtt_pre - card1_gtt_pre))MiB rss_kib=$rss_kib"

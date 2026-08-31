@@ -1,3 +1,9 @@
+> **SUPERSEDED AGAIN: the final profile was not validated with populated
+> context.** A 262,144-token allocation plus an 8,948-token prompt does not
+> reveal Vulkan's later VRAM-to-GTT migration. A real 104,769-token read found
+> a sharp residency cliff at 92-94K and only 18.00 tg afterward. Read
+> `llama_server/records/2026-08-30-flashnext-deep-residency/RESULTS.md` first.
+>
 > **NUMBERS IN THIS FILE ARE STALE.** They were measured before three method
 > errors were corrected (peak-during-load is not a valid VRAM reading; the
 > headless R9700 guard was too tight at 32,200; CPU expert offload hurts

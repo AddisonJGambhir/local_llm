@@ -1,5 +1,15 @@
 # Flash-Next max-context run — 2026-08-30 (continuation of Handoff 7)
 
+> **INVALIDATED FOR POPULATED-CONTEXT PERFORMANCE.** This record established
+> that a 262,144-token KV allocation can load, but its final all-GPU profile
+> was timed with only 8,948 live prompt tokens. It therefore did **not** prove
+> that the profile remains GPU-resident as the KV cache is populated. A later
+> real 104,769-token read reproduced Vulkan residency migration and severe
+> slowdown. Use
+> `llama_server/records/2026-08-30-flashnext-deep-residency/RESULTS.md` for the
+> corrected methodology and current baseline. In particular, section 11's
+> claims that the full-context speed targets were met are withdrawn.
+
 Goal from the user: maximum context first, then 50+ shallow tg, 800+ pp,
 Q8_0-or-better KV. This run took the context from 131,072 to **262,144**, the
 model's native trained maximum (`qwen4exp.context_length = 262144`).
