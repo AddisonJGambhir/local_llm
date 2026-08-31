@@ -1,52 +1,37 @@
 # ============================================================================
-# Qwen3.8-Flash-Next UD-Q2_K_XL -- Vulkan LAYER split, 262144 ctx -- 2026-08-30
-# MAX CONTEXT + 800+ PREFILL. 262,144 is the model's trained maximum
-# (qwen4exp.context_length); nothing above it without RoPE extension.
+# Qwen3.8-Flash-Next UD-Q2_K_XL -- Vulkan LAYER split, populated 200K
+# Corrected 2026-08-30 after actually reading the context.
 # ============================================================================
-# Measured, 9-pass median shallow tg, 8,948-token deep probe, q8_0 K and V,
-# EVERY EXPERT IN VRAM:
-#   tg      49.5362  (min 48.9522, max 50.2466, spread 1.2944)
-#   pp     855.2231
-#   deep tg 41.6166
-#   VRAM while actually generating, sampled every 6s for a minute, no drift:
-#     R9700 32,419 MiB of 32,624 physical
-#     XTX   23,521 MiB of 24,560 physical
+# The previous 262,144 / ub512 profile was validated with only 8,948 live
+# prompt tokens. Its 855 pp / 49.5 tg figures were shallow measurements and
+# did not reveal Vulkan residency migration. They are withdrawn.
 #
-# DECODE-FIRST VARIANT -- same everything, LLAMA_UBATCH=512:
-#   tg 50.1408 (9-pass median), pp 585.63, deep tg 41.0227
-#   R9700 31,069, XTX 23,520
-#   Trades 269 pp for 0.6 t/s. Use only if decode is all you care about.
+# AUTHORITATIVE FULL-DEPTH RESULT -- q8_0 K/V, EVERY EXPERT IN VRAM:
+#   allocated context     200,704
+#   actual prompt depth   199,320 tokens, followed by 256 generated tokens
+#   pp                    347.8360 t/s
+#   tg at 199K depth       13.5271 t/s
+#   R9700                  30,304-30,310 MiB during the entire request
+#   XTX                    23,524-23,620 MiB during the entire request
+#   R9700 GTT              19-44 MiB
+#   XTX GTT                1,748-1,773 MiB (normal desktop footprint)
+#   migration              none
+# Run: /tmp/fn-sweep/deep200k-ctx200704-ts400-ub128-none
+# Record: records/2026-08-30-flashnext-deep-residency/RESULTS.md
 #
-# ubatch is the ONLY pp lever: pp is 581.5 / 581.3 / 585.6 at ctx 131,072 /
-# 196,608 / 262,144 with ub 128. Allocated context does not affect pp at all.
+# WHY UBATCH 128: ub256 migrated roughly 1 GiB from R9700 VRAM into GTT late
+# in the prompt in two separate full-depth attempts, including with the same
+# 200,704 allocation. ub192 completed, but bought only +2.4% pp while losing
+# 2.4% tg and safety margin. ub128 is the best all-round populated-200K mode.
 #
-# NO CPU EXPERT OFFLOAD -- it is a dead end here, measured twice over:
-#   ub 512 with blk.11+28+35 experts on CPU -> pp 579.59, tg 35.98.
-#   That is WORSE pp than ub 128 all-GPU (585.63) and 13 t/s worse decode.
-#   CPU offload costs prefill as much as decode. Never trade experts for
-#   ubatch. If you must shed VRAM, shed context instead.
+# WHY SPLIT 400,600: at ub128 it improved both full-depth pp and tg over
+# split 375,625 (338.99 pp / 13.41 tg), while staying resident. Ratios 390-405
+# map to the same whole-layer placement. 410 moves one more layer to the XTX
+# and does not fit safely.
 #
-# NEVER MOVE EXPERTS ACROSS CARDS: -ot ...=Vulkan0/1 on one layer's expert
-# matrices measured 34.75 / 38.80 / 38.70 t/s against 49.48 unsplit.
-#
-# TENSOR-SPLIT IS QUANTISED TO WHOLE LAYERS. 390,610 / 395,605 / 400,600 /
-# 405,595 all produce byte-identical card totals (32,419 / 23,513) because all
-# four assign 19 layers to the XTX. Their apparent tg differences (48.31 to
-# 49.89 on 3-pass medians) are run-to-run noise, not tuning. 410,590 assigns
-# 20 and breaches the XTX at 24,484. Do not "tune" between 390 and 405.
-#
-# RUN-TO-RUN VARIANCE IS ~1.5 t/s on a 3-pass median. Use 9 passes before
-# believing any difference smaller than that.
-#
-# ub 256 BREACHES where ub 512 DOES NOT (XTX 24,277 vs 23,521). Vulkan buffer
-# sizing is not monotonic in ubatch on this model. Measure, never extrapolate.
-#
-# GUARDS: R9700 32,500 (headless card, no desktop, 124 MiB physical margin),
-# XTX 24,200 (drives the desktop, which itself holds 1,228-2,100 MiB). The
-# guard now enforces configured ceilings only AFTER the server reports ready;
-# during load it enforces physical limits, because allocation spikes high and
-# settles. Peak-during-load is not a valid measurement -- steady state while
-# prefilling or generating is.
+# NO CPU EXPERT OFFLOAD. Only the two embedding tables live on CPU. CPU expert
+# layers hurt both pp and tg. Do not raise allocated context or ubatch based on
+# startup VRAM: migration appears only after actually populating deep context.
 #
 # BUILD: requires the patched experimental worktree
 # llama.cpp-qwen4exp-vulkan-fusions (detached at aa1b06d0c, dirty; Vulkan
@@ -58,8 +43,8 @@
 # --device IS MANDATORY (Vulkan2 is the CPU/iGPU device). --load-mode mmap is
 # MANDATORY. --tensor-read-lazy was part of every validated run.
 #
-# MTP / SPECULATION: closed. The draft costs 2.43 GiB resident and there is
-# ~200 MiB spare. All five zero-VRAM n-gram modes were also measured and all
+# MTP / SPECULATION: closed. The draft costs 2.43 GiB resident and does not fit
+# on the XTX at this split. All five zero-VRAM n-gram modes were also measured and all
 # lose: on the deep agentic prompt, none 39.23 vs ngram-simple 27.26 and
 # ngram-mod 31.53.
 # ============================================================================
@@ -69,14 +54,18 @@ source "$LLAMA_SERVER_ROOT/config/profiles/default.sh"
 
 export GGML_VK_ALLOW_GRAPHICS_QUEUE=1
 
-PROFILE_NAME="preset-flashnext-Q2KXL-vulkan-fusions-262k"
+PROFILE_NAME="preset-flashnext-Q2KXL-vulkan-fusions-populated-200k"
 LLAMA_BINARY="$LLM_ROOT/llama.cpp-qwen4exp-vulkan-fusions/build-vulkan/bin/llama-server"
 LLAMA_MODEL="$LLAMA_SERVER_ROOT/models/Qwen3.8-Flash-Next/UD-Q2_K_XL/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf"
 LLAMA_BACKEND="vulkan"
 
 LLAMA_DEVICE="Vulkan0,Vulkan1"
-LLAMA_CONTEXT=262144
-LLAMA_UBATCH=512
+LLAMA_CONTEXT=200704
+LLAMA_UBATCH=128
+# Match the validated runs and the binary default. The shared profile's 24 GiB
+# host prompt cache creates avoidable RAM/swap pressure; 8 GiB still permits
+# idle prompt checkpoints without changing the live slot's KV capacity.
+LLAMA_CACHE_RAM=8192
 
 LLAMA_CACHE_TYPE_K="q8_0"
 LLAMA_CACHE_TYPE_V="q8_0"

@@ -171,3 +171,26 @@ The guard now detects the actual migration pattern after ready: a correlated
 512 MiB VRAM loss plus 512 MiB GTT rise, sustained for three five-second
 samples. This deliberately ignores an initially high but stable GTT footprint.
 Telemetry now includes exact `n_prompt_tokens` at each sample.
+
+## Shipped populated-200K placement
+
+One final full-depth A/B moved one whole layer from the R9700 to the XTX while
+keeping ub128 and the minimum 200,704-token allocation:
+
+| split | pp at prompt_n 199,320 | tg at depth 199,320 | result |
+|---:|---:|---:|---|
+| 375,625 | 338.9899 | 13.4109 | clean |
+| **400,600** | **347.8360** | **13.5271** | **clean; shipped** |
+
+Run: `/tmp/fn-sweep/deep200k-ctx200704-ts400-ub128-none`
+
+Split 400,600 remained resident for the entire request: R9700 VRAM
+30,304-30,310 MiB, XTX VRAM 23,524-23,620 MiB, R9700 GTT 19-44 MiB, and XTX
+GTT 1,748-1,773 MiB. It improved both pp and tg over split 375,625. Ratios
+390-405 map to the same whole-layer placement; 410 moves another layer to the
+XTX and does not fit safely.
+
+Vulkan menu preset 12 now ships this configuration and displays only the
+populated-depth figures. Its host prompt cache is pinned to 8,192 MiB, matching
+the binary default used by the validation runs rather than inheriting the
+shared 24,576 MiB value.
