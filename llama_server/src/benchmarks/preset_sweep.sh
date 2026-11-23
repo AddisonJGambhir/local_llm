@@ -2,7 +2,7 @@
 # Uniform pp/tg for every preset in llama-launch, so menu labels are comparable.
 #
 # ONE method for all: ~4.9k-token prompt (cold, cache_prompt=false) + 1,024-token
-# generation, temp 0 + top_k 1 + ignore_eos, whatever speculation the preset
+# generation, approved sampling (temp 1.0, top_p 0.95, top_k 20; never greedy) + ignore_eos, whatever speculation the preset
 # declares. pp is prompt_per_second, tg is predicted_per_second.
 #
 # AGGREGATION: best (max) of 2 reps, not median -- 2 reps has no median. Fine for
@@ -66,8 +66,8 @@ peakwatch(){
 
 PROMPT=$(python3 -c "print(('The system processes requests through a pipeline. '*420)[:24000])")
 PAYLOAD=$(python3 -c "
-import json,sys; print(json.dumps({'prompt':sys.argv[1],'n_predict':1024,'temperature':0,
-'top_k':1,'ignore_eos':True,'cache_prompt':False}))" "$PROMPT")
+import json,sys; print(json.dumps({'prompt':sys.argv[1],'n_predict':1024,'temperature':1.0,'top_p':0.95,
+'top_k':20,'ignore_eos':True,'cache_prompt':False}))" "$PROMPT")
 NOTE="max-of-2;repetitive-prompt"
 
 for f in $(grep -o 'preset-[a-z0-9.-]*\.sh' "$ROOT/bin/llama-launch" | sort -u); do

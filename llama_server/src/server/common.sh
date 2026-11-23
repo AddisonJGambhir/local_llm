@@ -44,7 +44,7 @@ llama_load_profile() {
     : "${LLAMA_FLASH_ATTN:=on}"
     : "${LLAMA_CONTEXT_SHIFT:=0}"
     : "${LLAMA_SPEC_MODE:=none}"
-    : "${LLAMA_TEMPERATURE:=0.6}"
+    : "${LLAMA_TEMPERATURE:=1.0}"   # approved sampling: temp 1.0 / top_p 0.95 / top_k 20, never 0
     : "${LLAMA_TOP_P:=0.95}"
     : "${LLAMA_TOP_K:=20}"
     : "${LLAMA_MIN_P:=0.0}"

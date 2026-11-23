@@ -328,7 +328,9 @@ def run_completion(port: int, prompt: str, max_tokens: int) -> dict | None:
         {
             "prompt": prompt,
             "n_predict": max_tokens,
-            "temperature": 0.0,
+            "temperature": 1.0,   # approved sampling (never greedy)
+            "top_p": 0.95,
+            "top_k": 20,
             "seed": 42,
             "cache_prompt": False,
             "ignore_eos": True,
