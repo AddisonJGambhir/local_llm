@@ -88,6 +88,46 @@ def main() -> int:
 
     print(f"client sync: kilo={update_json(kilo, mutate_kilo)}")
     print(f"client sync: openclaw={update_json(openclaw, mutate_openclaw)}")
+
+    # Pi and oh-my-pi list "local" statically (models.json / models.yml); keep its context + image support current.
+    vision = True
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://127.0.0.1:1234/props?model=local", timeout=5) as r:
+            vision = bool((json.load(r).get("modalities") or {}).get("vision", True))
+    except Exception:
+        pass
+    inputs = ["text", "image"] if vision else ["text"]
+
+    def fix_local(models: list) -> bool:
+        changed = False
+        for model in models:
+            if model.get("id") == args.alias:
+                if model.get("contextWindow") != args.context or model.get("input") != inputs:
+                    model["contextWindow"] = args.context
+                    model["input"] = inputs
+                    changed = True
+        return changed
+
+    pi = Path("~/.pi/agent/models.json").expanduser()
+    print(f"client sync: pi={update_json(pi, lambda d: fix_local(d.get('providers', {}).get('local', {}).get('models', [])))}")
+
+    omp = Path("~/.omp/agent/models.yml").expanduser()
+    if omp.exists():
+        try:
+            import yaml
+            text = omp.read_text(encoding="utf-8")
+            data = yaml.safe_load(text)
+            if fix_local(data.get("providers", {}).get("local", {}).get("models", [])):
+                header = "".join(line for line in text.splitlines(True) if line.startswith("#"))
+                temporary = omp.with_name(f".{omp.name}.{os.getpid()}.tmp")
+                temporary.write_text(header + "\n" + yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=200), encoding="utf-8")
+                os.replace(temporary, omp)
+                print("client sync: omp=updated")
+            else:
+                print("client sync: omp=unchanged")
+        except Exception as exc:  # best effort, like the others
+            print(f"client sync: omp=warning: {exc}")
     return 0
 
 
