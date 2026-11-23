@@ -46,6 +46,7 @@ integrations/pi-emote/
 !/loom/kv8_patch.py
 !/loom/port_rdna4.py
 !/loom/patch_sampler.py
+!/loom/kv8_draft_patch.py
 !/loom/int8-kv-plan.md
 # radiance: src/, models/, ffmpeg-dev/ are builds and downloads
 /radiance/*
