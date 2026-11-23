@@ -15,6 +15,7 @@ import os
 import json
 import re
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -31,6 +32,81 @@ def log(msg):
 # which makes Inkling loop in its reasoning; clients like Pi send no sampling fields, so fill them in here.
 # Temperature 0 (greedy) is never passed through.
 SAMPLING = {"temperature": 1.0, "top_p": 0.95, "top_k": 20}
+
+
+LIVE = os.environ.get("LOOM_LIVE", "1") != "0"          # live pp/tg lines while a streamed reply runs
+LIVE_SECS = float(os.environ.get("LOOM_LIVE_SECS", "3"))
+
+
+def _post_backend(path, payload, timeout=60):
+    c = http.client.HTTPConnection("127.0.0.1", BACKEND, timeout=timeout)
+    try:
+        c.request("POST", path, json.dumps(payload).encode(), {"Content-Type": "application/json"})
+        return json.loads(c.getresponse().read())
+    finally:
+        c.close()
+
+
+class LiveMeter:
+    """Every LIVE_SECS while a streamed chat reply runs, log prefill progress, then pp and live tg.
+    Prompt size comes from Loom's /v1/chat/completions/input_tokens; generated tokens are counted by re-tokenizing
+    the streamed text with /tokenize (a few ms), so tg here is approximate (~); the final line uses Loom's usage."""
+
+    def __init__(self, body):
+        self.t0 = time.time(); self.first = None; self.prompt = None; self.gen = 0
+        self.pending = []; self.lock = threading.Lock(); self.stop = threading.Event()
+        self.last_t = None; self.last_gen = 0
+        threading.Thread(target=self._count_prompt, args=(body,), daemon=True).start()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _count_prompt(self, body):
+        try:
+            j = json.loads(body)
+            if "image_url" in body.decode("utf-8", "ignore"):
+                return                      # counting would run the image path; final line still reports it
+            j.pop("stream", None); j.pop("stream_options", None)
+            self.prompt = int(_post_backend("/v1/chat/completions/input_tokens", j).get("input_tokens") or 0) or None
+        except Exception:
+            pass
+
+    def text(self, s):
+        if s:
+            with self.lock:
+                if self.first is None:
+                    self.first = time.time()
+                    p = self.prompt
+                    dt = self.first - self.t0
+                    log(f"  prefill done: {p if p else '?'} tok in {dt:.1f}s" + (f" = pp {p / dt:,.0f} tok/s (incl. cached prefix)" if p and dt > 0 else ""))
+                    self.last_t = self.first
+                self.pending.append(s)
+
+    def _tick(self):
+        now = time.time()
+        if self.first is None:
+            p = self.prompt
+            log(f"  prefilling {p if p else '?'} tok ... {now - self.t0:.0f}s")
+            return
+        with self.lock:
+            chunk = "".join(self.pending); self.pending = []
+        if chunk:
+            try:
+                self.gen += len(_post_backend("/tokenize", {"model": TAG, "content": chunk}, timeout=10).get("tokens") or [])
+            except Exception:
+                self.gen += max(1, len(chunk) // 4)
+        win = (self.gen - self.last_gen) / max(now - self.last_t, 1e-6)
+        avg = self.gen / max(now - self.first, 1e-6)
+        log(f"  generating: ~{self.gen} tok  tg ~{win:.0f} tok/s now, ~{avg:.0f} avg  ({now - self.t0:.0f}s)")
+        self.last_t, self.last_gen = now, self.gen
+
+    def _run(self):
+        while not self.stop.wait(LIVE_SECS):
+            try:
+                self._tick()
+            except Exception:
+                pass
+
+    def done(self):
+        self.stop.set()
 
 
 def _apply_sampling(j):
@@ -180,9 +256,11 @@ class Proxy(BaseHTTPRequestHandler):
         headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() != "host"}
         if body is not None:
             headers["Content-Length"] = str(len(body))
+        meter = LiveMeter(body) if (LIVE and stream and method == "POST" and body and "chat/completions" in self.path) else None
         try:
             c, r = self._backend(method, body, headers)
         except Exception as e:
+            if meter: meter.done()
             self._send_json(502, {"error": {"message": f"loom backend not reachable: {e}", "type": "server_error"}})
             log(f"{method} {self.path} 502 backend down")
             return
@@ -311,6 +389,14 @@ class Proxy(BaseHTTPRequestHandler):
                 ch = d.get("choices") or []
                 if first_tok is None and any((c.get("delta") or {}).get(k) for c in ch for k in ("content", "reasoning_content", "reasoning", "tool_calls")):
                     first_tok = time.time()
+                if meter:
+                    for c_ in ch:
+                        dl = c_.get("delta") or {}
+                        for k in ("reasoning_content", "reasoning", "content"):
+                            if isinstance(dl.get(k), str):
+                                meter.text(dl[k])
+                        for tc in dl.get("tool_calls") or []:
+                            meter.text(((tc.get("function") or {}).get("arguments")) or "")
                 if strip_usage and d.get("usage") and not ch:
                     return False
             return True
@@ -346,6 +432,7 @@ class Proxy(BaseHTTPRequestHandler):
             except Exception:
                 pass
         c.close()
+        if meter: meter.done()
         self.close_connection = True
         if self.path.startswith("/v1/"):
             ttft = first_tok or first
@@ -353,8 +440,14 @@ class Proxy(BaseHTTPRequestHandler):
             if usage:
                 pt = int(usage.get("prompt_tokens") or 0); gt = int(usage.get("completion_tokens") or 0)
                 ct = int((usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+            end = time.time()
+            speed = ""
+            if ttft and pt:
+                pp = (pt - ct) / max(ttft - t0, 1e-6); speed += f" pp={pp:,.0f}"
+            if ttft and gt and end - ttft > 0.05:
+                speed += f" tg={gt / (end - ttft):.1f}"
             log(f"{method} {self.path} {r.status} model={model_in!r} prompt={pt} cached={ct} gen={gt} "
-                f"first-token={(ttft - t0):.2f}s total={time.time() - t0:.1f}s {total}B" if ttft else
+                f"first-token={(ttft - t0):.2f}s total={end - t0:.1f}s{speed} {total}B" if ttft else
                 f"{method} {self.path} {r.status} model={model_in!r} prompt={pt} cached={ct} gen={gt} first-token=- total={time.time() - t0:.1f}s {total}B")
 
     def do_GET(self):
