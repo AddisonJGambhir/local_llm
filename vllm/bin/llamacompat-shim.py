@@ -55,6 +55,26 @@ def rewrite(path):
     return (target + sep + qs) if target else path
 
 
+
+# Approved sampling (BetterBench config/qwen-thinking-xtx.json). Fill in what the client leaves out; never pass temperature 0.
+SAMPLING = {"temperature": 1.0, "top_p": 0.95, "top_k": 20}
+
+
+def apply_sampling(body):
+    try:
+        j = json.loads(body)
+    except ValueError:
+        return body
+    if not isinstance(j, dict) or not isinstance(j.get("messages"), list):
+        return body
+    for k, v in SAMPLING.items():
+        if j.get(k) is None:
+            j[k] = v
+    t = j.get("temperature")
+    if not isinstance(t, (int, float)) or t <= 0:
+        j["temperature"] = SAMPLING["temperature"]
+    return json.dumps(j).encode()
+
 def upstream(method, path, body=None, headers=None, timeout=1800):
     conn = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=timeout)
     conn.request(method, path, body=body, headers=headers or {})
@@ -172,6 +192,10 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else None
         headers = {k: v for k, v in self.headers.items()
                    if k.lower() not in HOP and k.lower() != "host"}
+        if body and method == "POST":
+            body = apply_sampling(body)
+            headers = {k: v for k, v in headers.items() if k.lower() != "content-length"}
+            headers["Content-Length"] = str(len(body))
         try:
             conn, r = upstream(method, rewrite(self.path), body, headers)
         except Exception as exc:

@@ -27,6 +27,25 @@ def log(msg):
     print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
 
 
+# Approved sampling (BetterBench config/qwen-thinking-xtx.json). Loom's own default is temperature 0 = greedy,
+# which makes Inkling loop in its reasoning; clients like Pi send no sampling fields, so fill them in here.
+# Temperature 0 (greedy) is never passed through.
+SAMPLING = {"temperature": 1.0, "top_p": 0.95, "top_k": 20}
+
+
+def _apply_sampling(j):
+    changed = []
+    for k, v in SAMPLING.items():
+        if j.get(k) is None:
+            j[k] = v
+            changed.append(k)
+    t = j.get("temperature")
+    if not isinstance(t, (int, float)) or t <= 0:
+        j["temperature"] = SAMPLING["temperature"]
+        changed.append(f"temperature {t!r}->1.0")
+    return changed
+
+
 def _text(content):
     """Loom takes plain-string content only: join text parts, drop images/other parts."""
     if content is None or isinstance(content, str):
@@ -144,6 +163,7 @@ class Proxy(BaseHTTPRequestHandler):
                 j = json.loads(body)
                 if isinstance(j, dict) and isinstance(j.get("messages"), list):
                     j["messages"] = normalize_messages(j["messages"])
+                    _apply_sampling(j)
                 if isinstance(j, dict) and "model" in j:
                     model_in = j["model"]
                     j["model"] = TAG

@@ -11,6 +11,9 @@ models:
     max-num-seqs: 2
     max-model-len: 393216
     kv-cache-dtype: i8
+    temp: 1.0          # approved sampling for requests that send none (never 0)
+    top-p: 0.95
+    top-k: 20
     vision-tower-placement: ram   # image encoder weights in host RAM, VRAM stays with the KV cache (2026-11-22)
     max-num-batched-tokens: 4096
     checkpoint-interval: 4096

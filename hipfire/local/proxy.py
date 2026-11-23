@@ -22,6 +22,19 @@ LISTEN, BACKEND, TAG = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
 HOP = {"connection", "keep-alive", "transfer-encoding", "content-length", "proxy-connection", "upgrade", "te", "trailers"}
 
 
+# Approved sampling (BetterBench config/qwen-thinking-xtx.json). Fill in what the client leaves out; never pass temperature 0.
+SAMPLING = {"temperature": 1.0, "top_p": 0.95, "top_k": 20}
+
+
+def _apply_sampling(j):
+    for k, v in SAMPLING.items():
+        if j.get(k) is None:
+            j[k] = v
+    t = j.get("temperature")
+    if not isinstance(t, (int, float)) or t <= 0:
+        j["temperature"] = SAMPLING["temperature"]
+
+
 def log(msg):
     print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
 
@@ -64,6 +77,8 @@ class Proxy(BaseHTTPRequestHandler):
         if body and "json" in (self.headers.get("Content-Type") or "json"):
             try:
                 j = json.loads(body)
+                if isinstance(j, dict) and isinstance(j.get("messages"), list):
+                    _apply_sampling(j)
                 if isinstance(j, dict) and "model" in j:
                     model_in = j["model"]
                     j["model"] = TAG
