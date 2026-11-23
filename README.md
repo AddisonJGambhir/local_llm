@@ -44,7 +44,7 @@ Which engine to use:
 - **Fastest decode for code and agents:** Loom on the XTX (154 tok/s, 64K). For Qwen 27B, hipfire DFlash on the XTX.
 - **Best prose with Qwen 27B:** hipfire MTP K=3, or radiance on the R9700.
 - **Biggest model:** Strata. Qwen3.8-Flash-Next 125B MoE runs across both cards with experts streamed.
-- **Concurrency (many subagents):** vLLM. It has 8 slots in a shared 294K-token KV pool. The other engines serve one request at a time.
+- **Concurrency (many subagents):** Loom batches parallel requests (8 at once = 248 tok/s total on the R9700). vLLM has 8 slots in a shared 294K-token KV pool.
 
 Only one engine can hold :1234 at a time. `inference` asks before stopping the current one.
 The XTX and the R9700 can also run separate engines on separate ports. For example, Loom on the XTX and radiance on the R9700 measured

@@ -55,5 +55,16 @@ Context ceilings (needle at 90% depth, temp 1.0):
 
 - Requests that contain an image are never prefix-cached. An image turn re-processes the whole conversation. The proxy's
   old-image placeholder keeps the *following* text turns cached.
-- One request is served at a time (`rows: 1`). More rows are possible but untested here.
+- Concurrency works with the stock `rows: 1` card (BetterBench concurrency sweep, 448K int8 build; `rows: 2` and `4` gave
+  identical numbers, so `rows` is not the batch limit):
+
+  | parallel requests | total tok/s | per request |
+  | --: | --: | --: |
+  | 1 | 120 | 135 |
+  | 2 | 131 | 67.5 |
+  | 4 | 187 | 49 |
+  | 8 | 248 | 34 |
+
+  Two parallel requests gain almost nothing (the drafter's speedup is lost once requests share a batch); 4-8 subagents
+  roughly double total throughput.
 - There is no multi-GPU split for one model. The XTX and the R9700 run separate instances.
