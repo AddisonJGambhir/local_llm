@@ -17,7 +17,7 @@ ENGINES=(
   "vllm|vLLM|$VLLM/vllm_server.sh|$VLLM/bin/vllmkill|Qwen 3.8 27B AWQ-INT4, XTX + R9700 TP · ctx 131-262K · KV bf16 · VISION"
   "strata|Strata|$HOME/.local/bin/strata|$HOME/.local/bin/strata stop|Qwen3.8-Flash-Next 125B UD-IQ4_XS, both GPUs · ctx 256K · KV int8 · VISION (CPU)"
   "hipfire|hipfire|$HOME/.local/bin/hipfire|$HOME/.local/bin/hipfire stop|Qwen 3.8 27B MQ4, XTX or R9700 · ctx 156-262K · KV q8 / fwht3 / fwht4 / fp8 · VISION (not maxctx)"
-  "loom|Loom|$HOME/.local/bin/loom|$HOME/.local/bin/loom stop|Inkling-2-Mini, XTX 16-128K (KV f16) / R9700 288-448K (r9700-vision: KV int8, 448K) · VISION on vision + r9700-vision"
+  "loom|Loom|$HOME/.local/bin/loom|$HOME/.local/bin/loom stop|Inkling-2-Mini, XTX 16-128K (KV f16) / R9700 448K int8 + drafter, 576K int8 no drafter · VISION on vision + r9700-vision + r9700-max"
   "radiance|radiance|$HOME/.local/bin/radiance|$HOME/.local/bin/radiance stop|Qwen 3.8 27B IQR-V4, R9700 · ctx 256-384K · KV int8 · VISION (tower in RAM)"
 )
 field() { cut -d'|' -f"$2" <<<"$1"; }

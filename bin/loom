@@ -10,7 +10,7 @@ PORT="${LOOM_PORT:-1234}"; BPORT="${LOOM_BACKEND_PORT:-11437}"
 # profiles:  xtx (default)  XTX, 64K, DSpark depth 3, elastic small slabs     ~135 tok/s
 #            xtx-max         XTX, 128K, no drafter                             ~99 tok/s
 #            r9700           R9700, 256K, depth 3 (sampler-patched)            ~118 tok/s
-#            r9700-max       R9700, 384K, no drafter                           ~77 tok/s
+#            r9700-max       R9700, 576K, KV int8, no drafter, image input      ~94 tok/s
 #            r9700-vision    R9700, 448K, KV int8, depth 3 + image input (unsloth mmproj, community vision programs)
 #            r9700-vision-f16 R9700, 288K, KV f16, same otherwise (fallback)
 #            vision          XTX, 16K, community Inkling vision port
@@ -29,7 +29,8 @@ case "$PROFILE" in
   xtx)       DEV=0; PKG=Inkling-2-Mini-xtx-c65536-d3;    POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib) ;;
   xtx-max)   DEV=0; PKG=Inkling-2-Mini-xtx-c131072-d0;   POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib) ;;
   r9700)     DEV=1; PKG=Inkling-2-Mini-r9700-c262144-d3; CARD=model-c294912.json; POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib --memory_bytes=32256mib) ;;
-  r9700-max) DEV=1; PKG=Inkling-2-Mini-r9700-c393216-d0; POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib --memory_bytes=32256mib) ;;
+  r9700-max) DEV=1; PKG=Inkling-2-Mini-r9700-c262144-d3-vision-kv8; CARD=model-c589824-d0.json; POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib --memory_bytes=32256mib) ;;
+  # int8 KV, no drafter: 576K (575K needle @90% found 551 s; image after 500K text correct; 630K fails), 94 tok/s flat (2026-11-23)
   r9700-vision) DEV=1; PKG=Inkling-2-Mini-r9700-c262144-d3-vision-kv8; CARD=model-c458752.json; POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib --memory_bytes=32256mib) ;;
   # int8 KV (q8_0-style, loom/kv8_patch.py): 448K verified 2026-11-23 (440K needle @50/90% found, 30.9 GB; 512K = 32.4 GB, too tight)
   r9700-vision-f16) DEV=1; PKG=Inkling-2-Mini-r9700-c262144-d3-vision; CARD=model-c294912.json; POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib --memory_bytes=32256mib) ;;
@@ -120,7 +121,7 @@ PROFILES=(
   "xtx|XTX|64K|f16|DSpark depth 3|~135 tok/s, pp ~4,400 - default, best for coding · text only"
   "xtx-max|XTX|128K|f16|none|~99 tok/s · text only"
   "r9700|R9700|288K|f16|DSpark depth 3|~118 tok/s, pp ~4,100-4,350 (sampler-patched) · text only"
-  "r9700-max|R9700|384K|f16|none|~77 tok/s · text only · prompts over ~300K untested (288K window profiles are verified)"
+  "r9700-max|R9700|576K|int8|none|~94 tok/s (prose = same as drafter), pp ~4,300-4,400 · VISION · 575K prompts verified"
   "r9700-vision|R9700|448K|int8|DSpark depth 3|~127 tok/s, pp ~4,300-4,400 · VISION · 440K prompts verified (needle found)"
   "r9700-vision-f16|R9700|288K|f16|DSpark depth 3|~124 tok/s, pp ~4,300-4,500 · VISION up to ~253K · fallback"
   "vision|XTX|16K|f16|DFlash depth 1|Inkling-2-Mini-Uncensored fine-tune · VISION"

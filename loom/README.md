@@ -13,7 +13,7 @@ Packaging for other single-R9700 owners: **[loom-inkling2-mini-r9700](https://gi
 | `xtx` | XTX | 64K | f16 | DSpark depth 3 | 154 | 4,200-4,300 | - |
 | `xtx-max` | XTX | 128K | f16 | none | 99 | - | - |
 | `r9700` | R9700 | 288K | f16 | depth 3 | 118 | 4,100-4,350 | - |
-| `r9700-max` | R9700 | 384K | f16 | none | 77 | - | - |
+| **`r9700-max`** | R9700 | **576K** | **int8** | none | 94 (flat; prose same as with drafter) | 4,300-4,400 | yes |
 | **`r9700-vision`** | R9700 | **448K** | **int8** | depth 3 | **127** | 4,300-4,400 | yes |
 | `r9700-vision-f16` | R9700 | 288K | f16 | depth 3 | 124 | 4,300-4,500 | yes, to ~253K |
 | `vision` | XTX | 16K | f16 | DFlash depth 1 | - | - | yes (uncensored fine-tune) |
@@ -31,6 +31,7 @@ request is refused instead of evicting the model.
 | `loom-watchdog.sh` | Polls `/v1/status`. If Loom marks the model `failed`, it restarts the backend and re-pins (recovery takes about 14 s). |
 | `port_rdna4.py` | Adds gfx12 (RDNA4) twins of the 4 flash2 attention kernels, plus per-target dispatch. The published package was written for gfx1151 and does not compile on the R9700. |
 | `patch_sampler.py` | Sampled top-k: picks the top-k vocabulary chunks from the head's chunk maxima, then scans only k×128 logits. This raised no-drafter decode from 74 to 86 tok/s. |
+| `kv8_draft_patch.py` | int8 for the DSpark drafter's paged K/V too (works, same BetterBench, but does not raise the drafter profile's ceiling; not deployed) |
 | `kv8_patch.py` | **int8 paged KV**, q8_0-style (int8 + an f16 scale per 32 values). Each position and plane drops from 2048 to 1088 bytes. 11 kernels are touched; the sliding-window ring and the drafter stay f16. |
 | `int8-kv-plan.md` | The original design notes for the int8 change |
 
@@ -44,7 +45,11 @@ request is refused instead of evicting the model.
 | 285K-token prompt | 653 s | - |
 | image after 300K / 400K tokens of text | fails above ~253K | works (192 s / 303 s, correct descriptions) |
 
-512K loads, but it sits at 32.4 GB VRAM and the answer did not finish, so 448K is the ceiling.
+Context ceilings (needle at 90% depth, temp 1.0):
+- with the drafter: 440K found; 510K fails, also with the drafter cache in int8 (`kv8_draft_patch.py`, 32.2 GB): the drafter's
+  other buffers push VRAM to the edge, and answers go wrong near 32 GB. 448K stays the drafter profile's card.
+- without the drafter (`r9700-max`): 520K and 575K found (461 s / 551 s prefill, 31.1 GB); 630K fails (the model loops
+  over the filler text). Image after 500K tokens of text: correct.
 
 ## Known limits (Loom 0.2.0)
 

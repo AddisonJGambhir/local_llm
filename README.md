@@ -30,7 +30,7 @@ Ryzen 9 9950X3D (16c/32t), 64 GB DDR5, Ubuntu 26.04, ROCm 10.0 (`/opt/rocm`). Ru
 
 | Engine | Model | GPU(s) | Context | KV cache | Decode (tg) | Prefill (pp) | Vision |
 | --- | --- | --- | ---: | --- | ---: | ---: | --- |
-| [**Loom**](loom/) (AMD hrx-loom 0.2.0) | Inkling-2-Mini UD-Q4_K_XL (26B MoE) | R9700 | **448K** | **int8** (our patch) | **127** | 4,300-4,400 | yes |
+| [**Loom**](loom/) (AMD hrx-loom 0.2.0) | Inkling-2-Mini UD-Q4_K_XL (26B MoE) | R9700 | **448K** (drafter) / **576K** (no drafter) | **int8** (our patch) | **127** / 94 | 4,300-4,400 | yes |
 | | | XTX | 64K | f16 | 154 | 4,200-4,300 | text only |
 | [**radiance**](radiance/) 2.2.0 | Qwen3.8-27B IQ4R-S-V4 | R9700 | 256K / 384K | int8 | 121-127 | 3,040-3,190 | yes (tower in RAM) |
 | [**hipfire**](hipfire/) 0.4.7 | Qwen3.8-27B MQ4-XTS | XTX | 156-236K | q8 / fwht3 | 121-125 (DFlash) | 2,150-2,600 | yes |
@@ -40,7 +40,7 @@ Ryzen 9 9950X3D (16c/32t), 64 GB DDR5, Ubuntu 26.04, ROCm 10.0 (`/opt/rocm`). Ru
 | [**llama.cpp**](llama_server/) b10358+ | Qwen3.8-27B Q8_0 / UD-Q6_K_M | XTX + R9700 | 128-256K | f16 (presets), q8_0 / q5_1 (custom) | 34-51 | 509-947 | yes (CPU) |
 
 Which engine to use:
-- **Longest context:** Loom `r9700-vision`. It holds 448K (a 440K-token prompt with a needle at 50% and 90% depth was answered correctly) and reads images.
+- **Longest context:** Loom `r9700-max`: 576K with images (575K-token needle found, image after 500K tokens read correctly), 94 tok/s. `r9700-vision` holds 448K at 127 tok/s.
 - **Fastest decode for code and agents:** Loom on the XTX (154 tok/s, 64K). For Qwen 27B, hipfire DFlash on the XTX.
 - **Best prose with Qwen 27B:** hipfire MTP K=3, or radiance on the R9700.
 - **Biggest model:** Strata. Qwen3.8-Flash-Next 125B MoE runs across both cards with experts streamed.
