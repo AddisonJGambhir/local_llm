@@ -1,0 +1,160 @@
+#!/bin/bash
+# loom - serve Inkling-2-Mini profiles with AMD Loom as model "local".
+# Layout: harness -> :1234 proxy (model alias and /props) -> loom-serve :11437.
+#   loom            menu of profiles     loom PROFILE / loom start [PROFILE]   start directly + proxy, sync Pi/Hermes context
+#   loom stop       stop both          loom status     state + VRAM          loom logs     follow both logs
+# Loads with io_uring blocked (systemd-run), so no copy of the weights sits in system RAM.
+set -u
+D="$HOME/Desktop/local_llm/loom"
+PORT="${LOOM_PORT:-1234}"; BPORT="${LOOM_BACKEND_PORT:-11437}"
+# profiles:  xtx (default)  XTX, 64K, DSpark depth 3, elastic small slabs     ~135 tok/s
+#            xtx-max         XTX, 128K, no drafter                             ~99 tok/s
+#            r9700           R9700, 256K, depth 3 (sampler-patched)            ~118 tok/s
+#            r9700-max       R9700, 384K, no drafter                           ~77 tok/s
+#            r9700-vision    R9700, 448K, KV int8, depth 3 + image input (unsloth mmproj, community vision programs)
+#            r9700-vision-f16 R9700, 288K, KV f16, same otherwise (fallback)
+#            vision          XTX, 16K, community Inkling vision port
+PROFILE=xtx
+CARD=model.json
+case "${1:-}" in xtx|xtx-max|r9700|r9700-max|r9700-vision|r9700-vision-f16|vision) set -- start "$@" ;; esac
+case "${2:-}" in
+  xtx|xtx-max|r9700|r9700-max|r9700-vision|r9700-vision-f16|vision) PROFILE=$2 ;;
+  "")
+    if [[ "${1:-}" == proxy-restart ]]; then
+      running=$(cat "$D/.running-profile" 2>/dev/null || true)
+      case "${running%%,*}" in xtx|xtx-max|r9700|r9700-max|r9700-vision|r9700-vision-f16|vision) PROFILE=${running%%,*} ;; esac
+    fi ;;
+esac
+case "$PROFILE" in
+  xtx)       DEV=0; PKG=Inkling-2-Mini-xtx-c65536-d3;    POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib) ;;
+  xtx-max)   DEV=0; PKG=Inkling-2-Mini-xtx-c131072-d0;   POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib) ;;
+  r9700)     DEV=1; PKG=Inkling-2-Mini-r9700-c262144-d3; CARD=model-c294912.json; POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib --memory_bytes=32256mib) ;;
+  r9700-max) DEV=1; PKG=Inkling-2-Mini-r9700-c393216-d0; POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib --memory_bytes=32256mib) ;;
+  r9700-vision) DEV=1; PKG=Inkling-2-Mini-r9700-c262144-d3-vision-kv8; CARD=model-c458752.json; POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib --memory_bytes=32256mib) ;;
+  # int8 KV (q8_0-style, loom/kv8_patch.py): 448K verified 2026-11-23 (440K needle @50/90% found, 30.9 GB; 512K = 32.4 GB, too tight)
+  r9700-vision-f16) DEV=1; PKG=Inkling-2-Mini-r9700-c262144-d3-vision; CARD=model-c294912.json; POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib --memory_bytes=32256mib) ;;
+  # --memory_bytes=32256mib = 31.5 GiB (card 31.86 GiB; physical peak 29.8 GiB at 250K + image): room outside the pool for the driver + vision encoder scratch; with the model
+  # pinned (below) an oversized request is refused instead of killing the model (2026-11-23 tests, bench-scripts/prod-validate.sh)
+  vision)    DEV=0; PKG=Inkling-2-Mini-Vision; CARD=model-xtx.json; POOL=(--state_slab_bytes=4mib --weight_slab_bytes=64mib) ;;
+esac
+c_g=$'\e[32m'; c_r=$'\e[31m'; c_0=$'\e[0m'
+die() { echo "${c_r}loom: $*${c_0}" >&2; exit 1; }
+port_busy() { ss -Htln "( sport = :$1 )" | grep -q .; }
+
+load_profile() {
+  local metadata
+  [[ -r "$D/$PKG/$CARD" ]] || die "model card missing: $D/$PKG/$CARD"
+  metadata=$(python3 - "$D/$PKG/$CARD" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as file:
+    card = json.load(file)
+preset = card["presets"]["chat"]
+service = card["services"][preset["service"]]
+print(preset["execution"]["context_capacity"], card["model"]["id"], int("image" in service.get("components", {})))
+PY
+  ) || die "could not read model card for $PROFILE"
+  read -r NCTX TAG VISION <<<"$metadata"
+}
+
+start_proxy() {
+  systemd-run --user --quiet --unit=loom-proxy -E LOOM_NCTX="$NCTX" -E LOOM_VISION="$VISION" \
+    python3 -I "$D/proxy.py" "$PORT" "$BPORT" "$TAG"
+}
+
+cmd_start() {
+  if systemctl --user is-active -q loom-proxy && systemctl --user is-active -q loom-backend; then
+    echo "loom: already running ($(cat "$D/.running-profile" 2>/dev/null || echo ?)) - http://127.0.0.1:$PORT/v1 (model 'local'). Attaching ('loomkill' to stop)."
+    cmd_logs
+  fi
+  port_busy "$PORT"  && die "port $PORT is in use (hipfire? strata? llama-server?) - stop it first"
+  port_busy "$BPORT" && die "backend port $BPORT is in use - 'loom stop' first"
+  load_profile
+  systemctl --user reset-failed loom-backend loom-proxy >/dev/null 2>&1
+  echo "loom: starting profile '$PROFILE' - $PKG on amdgpu://$DEV (${NCTX} ctx)..."
+  systemd-run --user --quiet --unit=loom-backend --working-directory="$D" \
+    -p SystemCallFilter=~io_uring_setup -p SystemCallErrorNumber=ENOSYS \
+    "$D/.venv/bin/loom-serve" --model="$D/$PKG/$CARD" "--device=amdgpu://$DEV?completion_spin_ns=4294967295" \
+    "${POOL[@]}" --listen=127.0.0.1:$BPORT || die "backend failed to start"
+  local t0=$SECONDS s=""
+  while :; do
+    s=$(curl -s -m 2 "http://127.0.0.1:$BPORT/v1/status" 2>/dev/null)
+    grep -q '"phase":"idle"' <<<"$s" && break
+    if grep -qE '"phase":"failed"|"registration":"failed"' <<<"$s" || ! systemctl --user is-active -q loom-backend; then
+      echo "$s" | head -c 600; echo; systemctl --user stop loom-backend 2>/dev/null; die "model failed to load - see 'loom logs'"
+    fi
+    (( SECONDS - t0 > 600 )) && { systemctl --user stop loom-backend; die "not ready after 10 min"; }
+    sleep 2
+  done
+  # keep the weights resident: without a pin, memory pressure evicts them and the model fails ("residency waiting for capacity")
+  curl -s -m 30 -X POST -H 'Content-Type: application/json' -d "{\"model\":\"$TAG\"}" "http://127.0.0.1:$BPORT/v1/models/pin" >/dev/null \
+    && echo "loom: model pinned (weights stay resident)"
+  systemctl --user stop loom-watchdog >/dev/null 2>&1; systemctl --user reset-failed loom-watchdog >/dev/null 2>&1
+  systemd-run --user --quiet --unit=loom-watchdog "$D/loom-watchdog.sh" "$BPORT" "$TAG" && echo "loom: watchdog on (restarts the model if it ever fails)"
+  start_proxy || die "proxy failed to start"
+  for _ in $(seq 20); do port_busy "$PORT" && break; sleep 0.5; done
+  echo "$PROFILE, ${NCTX} ctx" > "$D/.running-profile"
+  echo "${c_g}loom: ready${c_0} - http://127.0.0.1:$PORT/v1 (model 'local', ${NCTX} ctx) in $((SECONDS - t0))s"
+  local L="$HOME/Desktop/local_llm/llama_server"
+  if [[ -z "${LOOM_NO_SYNC:-}" ]]; then
+    [[ -f "$L/src/server/sync_clients.py" ]] && python3 "$L/src/server/sync_clients.py" --alias local --context "$NCTX" >/dev/null 2>&1 && echo "        synced Pi/clients to ${NCTX} ctx"
+    if [[ -x "$L/bin/hermes-sync-ctx" ]]; then
+      local hs; hs=$(LLAMA_PORT="$PORT" "$L/bin/hermes-sync-ctx" 2>&1); sed 's/^/        /' <<<"$hs"
+      if grep -q '^updated ' <<<"$hs" && systemctl --user is-active --quiet hermes-gateway.service; then
+        systemctl --user restart hermes-gateway.service && echo "        restarted hermes-gateway for the new context"
+      fi
+    fi
+  fi
+  cmd_logs
+}
+cmd_stop() { systemctl --user stop loom-watchdog loom-proxy loom-backend 2>/dev/null; systemctl --user reset-failed loom-watchdog loom-proxy loom-backend >/dev/null 2>&1; echo "loom: stopped"; }
+cmd_status() {
+  for u in loom-backend loom-proxy; do echo "$u: $(systemctl --user is-active $u)"; done
+  curl -s -m 2 "http://127.0.0.1:$BPORT/v1/status" | python3 -c "import json,sys;d=json.load(sys.stdin)['data'][0]['loom'];print('model:',d['registration'],d['status']['phase'])" 2>/dev/null
+  rocm-smi --showmeminfo vram 2>/dev/null | grep -E "GPU\[[01]\].*Used" | awk '{printf "  %s %.1f GB used\n",$1,$NF/1e9}'
+}
+cmd_logs() { echo "loom: live requests (Ctrl+C detaches; server keeps running - 'loom stop' to stop)"; exec journalctl --user -f -n 20 -o cat -u loom-proxy -u loom-backend; }
+# name | GPU | context | drafter | measured BetterBench (temp 1.0, 3 passes unless noted)
+PROFILES=(
+  "xtx|XTX|64K|f16|DSpark depth 3|~135 tok/s, pp ~4,400 - default, best for coding · text only"
+  "xtx-max|XTX|128K|f16|none|~99 tok/s · text only"
+  "r9700|R9700|288K|f16|DSpark depth 3|~118 tok/s, pp ~4,100-4,350 (sampler-patched) · text only"
+  "r9700-max|R9700|384K|f16|none|~77 tok/s · text only · prompts over ~300K untested (288K window profiles are verified)"
+  "r9700-vision|R9700|448K|int8|DSpark depth 3|~127 tok/s, pp ~4,300-4,400 · VISION · 440K prompts verified (needle found)"
+  "r9700-vision-f16|R9700|288K|f16|DSpark depth 3|~124 tok/s, pp ~4,300-4,500 · VISION up to ~253K · fallback"
+  "vision|XTX|16K|f16|DFlash depth 1|Inkling-2-Mini-Uncensored fine-tune · VISION"
+)
+cmd_menu() {
+  local c_b=$'\e[1m' c_d=$'\e[2m' run="" i=1
+  systemctl --user is-active -q loom-backend && run=$(cat "$D/.running-profile" 2>/dev/null || echo "?")
+  echo "${c_b}Loom - Inkling-2-Mini UD-Q4_K_XL profiles${c_0} (serves as 'local' on :$PORT)"
+  for p in "${PROFILES[@]}"; do
+    IFS='|' read -r n g c kv dr sp <<<"$p"
+    printf "  %d) %-16s %-6s ctx %-5s KV %-5s drafter: %-15s\n     ${c_d}%s${c_0}\n" "$i" "$n" "$g" "$c" "$kv" "$dr" "$sp"; i=$((i+1))
+  done
+  echo
+  [[ -n "$run" ]] && echo "${c_g}running now: $run${c_0} - picking another switches over"
+  read -r -p "Profile (1-${#PROFILES[@]}$([[ -n "$run" ]] && echo ", a=attach to logs, s=stop"), q=quit): " ch
+  case "$ch" in
+    a|A) cmd_logs ;;
+    s|S) cmd_stop ;;
+    q|Q|"") exit 0 ;;
+    *) [[ "$ch" =~ ^[0-9]+$ ]] && (( ch >= 1 && ch <= ${#PROFILES[@]} )) || die "invalid choice '$ch'"
+       local pick; pick=$(cut -d'|' -f1 <<<"${PROFILES[$((ch-1))]}")
+       [[ "$run" == "$pick,"* ]] && cmd_logs
+       [[ -n "$run" ]] && cmd_stop && sleep 2
+       exec "$0" start "$pick" ;;
+  esac
+}
+case "${1:-menu}" in
+  menu) cmd_menu ;;
+  start) cmd_start ;; stop) cmd_stop ;; restart) cmd_stop; sleep 2; cmd_start ;;
+  status) cmd_status ;; logs|watch) cmd_logs ;;
+  proxy-restart) load_profile; systemctl --user stop loom-proxy 2>/dev/null; systemctl --user reset-failed loom-proxy >/dev/null 2>&1
+                 start_proxy && echo "loom: proxy restarted" ;;
+  list) for p in "${PROFILES[@]}"; do echo "$p" | tr '|' '\t'; done ;;
+  *) echo "usage: loom            menu (pick a profile; attach/stop if running)"
+     echo "       loom PROFILE    start xtx|xtx-max|r9700|r9700-max|vision directly (attaches if already running)"
+     echo "       loom start|stop|restart|status|logs|list [profile]"; exit 1 ;;
+esac

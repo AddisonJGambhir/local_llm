@@ -2,7 +2,9 @@
 /llama.cpp*/
 
 # model weights (100s of GB, downloadable)
-llama_server/models/*.gguf
+llama_server/models/**/*.gguf
+llama_server/models/**/*.safetensors
+llama_server/models/**/*.rad
 llama_server/models/*.bin
 llama_server/models/.cache/
 
@@ -34,3 +36,38 @@ integrations/pi-emote/
 
 # playwright-mcp scrape cruft (page dumps, console logs)
 .playwright-mcp/
+
+# --- engine working dirs: track launchers/configs/patch scripts only, never packages, weights, venvs, builds ---
+# Loom (AMD hrx-loom): packages are 18 GB hard-linked model trees
+/loom/*
+!/loom/README.md
+!/loom/proxy.py
+!/loom/loom-watchdog.sh
+!/loom/kv8_patch.py
+!/loom/port_rdna4.py
+!/loom/patch_sampler.py
+!/loom/int8-kv-plan.md
+# radiance: src/, models/, ffmpeg-dev/ are builds and downloads
+/radiance/*
+!/radiance/README.md
+!/radiance/build-radiance.sh
+!/radiance/build-radiance-ffmpeg.sh
+!/radiance/configs/
+/radiance/configs/bak-*/
+/radiance/configs/*.bak
+/radiance/configs/tune/
+# other clones / scratch engines (re-clonable)
+/hipfire-ben/
+/hipfire-bench-bb/
+/hipfire-r9700-bb/
+/tokenspeed/
+/unsloth-llama-inkling/
+/tools/
+/build-*.log
+# bench output
+/bench-scripts/*.out
+
+# local backups of edited presets/configs
+llama_server/backup-*/
+*.bak
+*.bak-*

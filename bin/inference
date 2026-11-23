@@ -1,0 +1,98 @@
+#!/bin/bash
+# inference - one menu for every local engine that serves :1234 as model "local".
+#
+#   inference          menu: shows what is on :1234 now, pick an engine to open its own menu
+#   inference status   what is serving :1234 right now
+#   inference stop     stop whatever engine is serving :1234
+#   inference ENGINE   open that engine's menu directly (llama | vllm | strata | hipfire | loom | radiance)
+set -uo pipefail
+PORT=1234
+LLAMA="$HOME/Desktop/local_llm/llama_server"
+VLLM="$HOME/Desktop/vllm"
+c_b=$'\e[1m'; c_d=$'\e[2m'; c_g=$'\e[32m'; c_r=$'\e[31m'; c_0=$'\e[0m'
+
+# key | label | menu command | stop command | what it runs
+ENGINES=(
+  "llama|llama.cpp|$LLAMA/llama_server.sh|$LLAMA/llamactl stop|Qwen 3.8 27B Q8_0 / UD-Q6_K_M, both GPUs · ctx 128-256K · KV f16 (presets) or q8_0/q5_1 (custom) · VISION (CPU)"
+  "vllm|vLLM|$VLLM/vllm_server.sh|$VLLM/bin/vllmkill|Qwen 3.8 27B AWQ-INT4, XTX + R9700 TP · ctx 131-262K · KV bf16 · VISION"
+  "strata|Strata|$HOME/.local/bin/strata|$HOME/.local/bin/strata stop|Qwen3.8-Flash-Next 125B UD-IQ4_XS, both GPUs · ctx 256K · KV int8 · VISION (CPU)"
+  "hipfire|hipfire|$HOME/.local/bin/hipfire|$HOME/.local/bin/hipfire stop|Qwen 3.8 27B MQ4, XTX or R9700 · ctx 156-262K · KV q8 / fwht3 / fwht4 / fp8 · VISION (not maxctx)"
+  "loom|Loom|$HOME/.local/bin/loom|$HOME/.local/bin/loom stop|Inkling-2-Mini, XTX 16-128K (KV f16) / R9700 288-448K (r9700-vision: KV int8, 448K) · VISION on vision + r9700-vision"
+  "radiance|radiance|$HOME/.local/bin/radiance|$HOME/.local/bin/radiance stop|Qwen 3.8 27B IQR-V4, R9700 · ctx 256-384K · KV int8 · VISION (tower in RAM)"
+)
+field() { cut -d'|' -f"$2" <<<"$1"; }
+
+# which engine owns :1234 (empty if none)
+current() {
+  local pid cmd
+  pid=$(ss -Htlnp "( sport = :$PORT )" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+  [[ -z "$pid" ]] && { ss -Htln "( sport = :$PORT )" | grep -q . && echo "unknown"; return; }
+  cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)
+  case "$cmd" in
+    *local_llm/loom/proxy.py*)            echo loom ;;
+    *radiance*)                           echo radiance ;;
+    *.hipfire*)                           echo hipfire ;;
+    *engine\ strata*|*strata*)            echo strata ;;
+    *vllm*|*llamacompat-shim*)            echo vllm ;;
+    *llama-server*|*llama-proxy*|*llama*) echo llama ;;
+    *)                                    echo "unknown (pid $pid: ${cmd:0:80})" ;;
+  esac
+}
+find_engine() { for e in "${ENGINES[@]}"; do [[ "$(field "$e" 1)" == "$1" ]] && { echo "$e"; return 0; }; done; return 1; }
+
+cmd_status() {
+  local cur; cur=$(current)
+  if [[ -z "$cur" ]]; then echo ":$PORT  ${c_d}nothing running${c_0}"
+  else
+    local e; e=$(find_engine "$cur") && echo ":$PORT  ${c_g}$(field "$e" 2)${c_0} is serving 'local'" || echo ":$PORT  ${c_r}$cur${c_0}"
+    [[ "$cur" == loom ]] && echo "        profile: $(cat "$HOME/Desktop/local_llm/loom/.running-profile" 2>/dev/null)"
+  fi
+  rocm-smi --showmeminfo vram 2>/dev/null | awk '/GPU\[0\].*Used/{x=$NF} /GPU\[1\].*Used/{r=$NF} END{if(x!="")printf "XTX    %.1f GB VRAM used\nR9700  %.1f GB VRAM used\n",x/1e9,r/1e9}'
+}
+
+cmd_stop() {
+  local cur e; cur=$(current)
+  [[ -z "$cur" ]] && { echo "inference: nothing running on :$PORT"; return 0; }
+  e=$(find_engine "$cur") || { echo "${c_r}inference: :$PORT is held by $cur - stop it by hand${c_0}"; return 1; }
+  echo "inference: stopping $(field "$e" 2)..."
+  eval "$(field "$e" 4)"
+}
+
+open_engine() {   # $1 = engine line; switches over if another engine holds :1234
+  local cur key; cur=$(current); key=$(field "$1" 1)
+  if [[ -n "$cur" && "$cur" != "$key" ]]; then
+    read -r -p "$(field "$(find_engine "$cur" || echo "|$cur")" 2) is running on :$PORT - stop it first? [Y/n] " yn
+    [[ "$yn" =~ ^[Nn] ]] && exit 0
+    cmd_stop || exit 1
+    sleep 2
+  fi
+  exec $(field "$1" 3)
+}
+
+cmd_menu() {
+  echo "${c_b}Local inference${c_0} (every engine serves model 'local' on http://127.0.0.1:$PORT/v1)"
+  cmd_status | sed 's/^/  /'; echo
+  local i=1 cur; cur=$(current)
+  for e in "${ENGINES[@]}"; do
+    local mark="  "; [[ "$(field "$e" 1)" == "$cur" ]] && mark="${c_g}* ${c_0}"
+    printf "%s%d) %-10s ${c_d}%s${c_0}\n" "$mark" "$i" "$(field "$e" 2)" "$(field "$e" 5)"; i=$((i+1))
+  done
+  echo
+  read -r -p "Engine (1-${#ENGINES[@]}, s=stop what's running, q=quit): " ch
+  case "$ch" in
+    s|S) cmd_stop ;;
+    q|Q|"") exit 0 ;;
+    *) [[ "$ch" =~ ^[0-9]+$ ]] && (( ch >= 1 && ch <= ${#ENGINES[@]} )) || { echo "${c_r}invalid choice '$ch'${c_0}"; exit 1; }
+       open_engine "${ENGINES[$((ch-1))]}" ;;
+  esac
+}
+
+case "${1:-}" in
+  "")     cmd_menu ;;
+  status) cmd_status ;;
+  stop)   cmd_stop ;;
+  llama|llama.cpp|llamacpp) open_engine "$(find_engine llama)" ;;
+  vllm|strata|hipfire|loom|radiance) open_engine "$(find_engine "$1")" ;;
+  -h|--help|help) sed -n 2,7p "$0" | sed 's/^# \{0,1\}//' ;;
+  *) echo "inference: unknown '$1' - try: inference help"; exit 1 ;;
+esac

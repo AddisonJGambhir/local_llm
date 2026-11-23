@@ -1,3 +1,5 @@
+# SUPERSEDED by `2026-08-29-FLASHNEXT-HANDOFF-3.md`
+
 # Handoff 2: Qwen3.8-Flash-Next -- shipped at tg 42.5, one unverified change
 
 Supersedes `2026-08-29-FLASHNEXT-HANDOFF.md`, whose numbers (tg 9.14) are stale.

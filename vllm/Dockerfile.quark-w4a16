@@ -1,0 +1,13 @@
+FROM capicua25x/vllm-rocm-rdna4:0.28.0-rdna4
+
+# AMD's Qwen3.8 Quark AWQ W4A16 checkpoint requires vLLM PR #48606,
+# which is not in the 0.28.0 release yet. These are Python-only loader and
+# quantization-scheme files; retain the image's prebuilt ROCm kernels.
+ARG VLLM_QUARK_PR_COMMIT=39bd959b582c85e78e7e0326d49042ce7c3c07ed
+RUN set -eux; \
+    base="https://raw.githubusercontent.com/vllm-project/vllm/${VLLM_QUARK_PR_COMMIT}/vllm/model_executor/layers/quantization/quark"; \
+    curl -fsSL "$base/quark.py" -o /build/vllm/vllm/model_executor/layers/quantization/quark/quark.py; \
+    curl -fsSL "$base/utils.py" -o /build/vllm/vllm/model_executor/layers/quantization/quark/utils.py; \
+    curl -fsSL "$base/schemes/__init__.py" -o /build/vllm/vllm/model_executor/layers/quantization/quark/schemes/__init__.py; \
+    curl -fsSL "$base/schemes/quark_w4a16_int4.py" -o /build/vllm/vllm/model_executor/layers/quantization/quark/schemes/quark_w4a16_int4.py; \
+    curl -fsSL "https://raw.githubusercontent.com/vllm-project/vllm/${VLLM_QUARK_PR_COMMIT}/vllm/model_executor/layers/quantization/auto_awq.py" -o /build/vllm/vllm/model_executor/layers/quantization/auto_awq.py

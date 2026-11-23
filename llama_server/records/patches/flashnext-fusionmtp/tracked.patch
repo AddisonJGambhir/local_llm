@@ -1,0 +1,1008 @@
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index 72e844aeb..159ac1974 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -653,6 +653,10 @@ static constexpr std::initializer_list<ggml_op> topk_moe_late_softmax      { GGM
+ 
+ // Snake activation: y = x + sin(a*x)^2 * inv_b. Used by the optimize_graph reorder
+ // pass so it keeps the chain contiguous and by the dispatcher to detect the fusion.
++static constexpr std::initializer_list<ggml_op> mul_bcast_add_pattern      { GGML_OP_REPEAT, GGML_OP_RESHAPE,
++                                                                              GGML_OP_MUL, GGML_OP_ADD };
++static constexpr std::initializer_list<ggml_op> mul_bcast_add_pattern_novw  { GGML_OP_REPEAT, GGML_OP_MUL,
++                                                                              GGML_OP_ADD };
+ static constexpr std::initializer_list<ggml_op> snake_pattern              { GGML_OP_MUL,      GGML_OP_SIN,
+                                                                              GGML_OP_SQR,      GGML_OP_MUL,
+                                                                              GGML_OP_ADD };
+@@ -1056,6 +1060,7 @@ struct vk_device_struct {
+     vk_pipeline pipeline_argsort_f32[num_argsort_pipelines];
+     vk_pipeline pipeline_argsort_large_f32[num_argsort_pipelines];
+     vk_pipeline pipeline_topk_f32[num_topk_pipelines];
++    vk_pipeline pipeline_topk_radix_f32;
+     vk_pipeline pipeline_sum_rows_f32;
+     vk_pipeline pipeline_cross_entropy_loss_f32, pipeline_cross_entropy_loss_f32_wg512;
+     vk_pipeline pipeline_cross_entropy_loss_back_f32, pipeline_cross_entropy_loss_back_f32_wg512;
+@@ -1075,6 +1080,7 @@ struct vk_device_struct {
+     vk_pipeline pipeline_col2im_1d_f16;
+     vk_pipeline pipeline_col2im_1d_bf16;
+     vk_pipeline pipeline_out_prod_f32;
++    vk_pipeline pipeline_mul_bcast_add_f32;
+     vk_pipeline pipeline_snake_f32;
+     vk_pipeline pipeline_snake_f16;
+     vk_pipeline pipeline_snake_bf16;
+@@ -1299,6 +1305,11 @@ struct vk_mat_mat_push_constants {
+ #define MAT_VEC_FUSION_FLAGS_BIAS1 0x2
+ #define MAT_VEC_FUSION_FLAGS_SCALE0 0x4
+ #define MAT_VEC_FUSION_FLAGS_SCALE1 0x8
++#define MAT_VEC_FUSION_FLAGS_SCALEC0 0x10
++#define MAT_VEC_FUSION_FLAGS_SILU 0x20
++#define MAT_VEC_FUSION_FLAGS_SIGMOID 0x40
++#define MAT_VEC_FUSION_FLAGS_SCALEC1 0x80
++#define MAT_VEC_FUSION_FLAGS_MUL0 0x100
+ 
+ struct vk_mat_vec_push_constants {
+     uint32_t ncols;
+@@ -1309,6 +1320,8 @@ struct vk_mat_vec_push_constants {
+     uint32_t batch_stride_b;
+     uint32_t batch_stride_d;
+     uint32_t fusion_flags;
++    float    fuse_scale0;
++    float    fuse_scale1;
+     uint32_t base_work_group_y;
+     uint32_t ne02;
+     uint32_t ne12;
+@@ -1358,6 +1371,8 @@ struct vk_mat_vec_id_push_constants {
+     uint32_t batch_stride_b;
+     uint32_t batch_stride_d;
+     uint32_t fusion_flags;
++    float    fuse_scale0;
++    float    fuse_scale1;
+     uint32_t nei0;
+     uint32_t ne11;
+     uint32_t expert_i1;
+@@ -1822,6 +1837,13 @@ struct vk_op_snake_push_constants {
+     uint32_t ne1;
+ };
+ 
++struct vk_op_mul_bcast_add_push_constants {
++    uint32_t ne;
++    uint32_t ne0,   ne1,   ne2,   ne3;
++    uint32_t a_ne0, a_ne1, a_ne2, a_ne3;
++    uint32_t w_ne0, w_ne1, w_ne2, w_ne3;
++};
++
+ struct vk_op_pool1d_push_constants {
+     uint32_t IL;
+     uint32_t OL;
+@@ -5800,6 +5822,11 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
+                 ggml_vk_create_pipeline2(device, device->pipeline_topk_f32[i], "topk_f32_"+std::to_string(i), topk_nary_search_f32_len, topk_nary_search_f32_data, "main", 2, sizeof(vk_op_topk_push_constants), {BLOCK_SIZE, 1, 1}, {BLOCK_SIZE, device->subgroup_size, device->subgroup_size_log2}, 1, true, true, device->subgroup_size);
+             } else if (2 * sizeof(int) * BLOCK_SIZE <= device->properties.limits.maxComputeSharedMemorySize) {
+                 ggml_vk_create_pipeline2(device, device->pipeline_topk_f32[i], "topk_f32_"+std::to_string(i), topk_argsort_f32_len, topk_argsort_f32_data, "main", 2, sizeof(vk_op_topk_push_constants), {BLOCK_SIZE, 1, 1}, {BLOCK_SIZE, NCOLS_PADDED_LOG2}, 1, true);
++        }
++        if (i == 0) {
++            // radix selection for k beyond the shared-memory shaders (one workgroup per row)
++            const uint32_t RADIX_WG = std::min<uint32_t>(1024, 1u << device->max_workgroup_size_log2);
++            ggml_vk_create_pipeline2(device, device->pipeline_topk_radix_f32, "topk_radix_f32", topk_radix_f32_len, topk_radix_f32_data, "main", 2, sizeof(vk_op_topk_push_constants), {RADIX_WG, 1, 1}, {RADIX_WG}, 1, true);
+             }
+         }
+     }
+@@ -5875,6 +5902,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
+ 
+     ggml_vk_create_pipeline(device, device->pipeline_out_prod_f32, "out_prod_f32", out_prod_f32_len, out_prod_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {256, 1, 1}, {}, 1);
+ 
++    ggml_vk_create_pipeline(device, device->pipeline_mul_bcast_add_f32, "mul_bcast_add_f32", mul_bcast_add_f32_len, mul_bcast_add_f32_data, "main", 4, sizeof(vk_op_mul_bcast_add_push_constants), {256, 1, 1}, {}, 1);
+     ggml_vk_create_pipeline(device, device->pipeline_snake_f32,  "snake_f32",  snake_f32_len,  snake_f32_data,  "main", 4, sizeof(vk_op_snake_push_constants), {256, 1, 1}, {}, 1);
+     ggml_vk_create_pipeline(device, device->pipeline_snake_f16,  "snake_f16",  snake_f16_len,  snake_f16_data,  "main", 4, sizeof(vk_op_snake_push_constants), {256, 1, 1}, {}, 1);
+     ggml_vk_create_pipeline(device, device->pipeline_snake_bf16, "snake_bf16", snake_bf16_len, snake_bf16_data, "main", 4, sizeof(vk_op_snake_push_constants), {256, 1, 1}, {}, 1);
+@@ -9768,23 +9796,59 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
+     }
+ 
+     uint32_t fusion_flags = 0;
++    float fuse_scale0 = 1.0f;
++    float fuse_scale1 = 1.0f;
+ 
+     vk_subbuffer d_F0 = d_D;
+-    if (ctx->num_additional_fused_ops > 0) {
+-        const ggml_tensor * add = cgraph->nodes[node_idx + 1];
+-        const ggml_tensor * bias = add->src[0] == dst ? add->src[1] : add->src[0];
++    vk_subbuffer d_F1 = d_D;
++    if (ctx->num_additional_fused_ops > 0 && cgraph->nodes[node_idx + 1]->op == GGML_OP_ADD) {
++        {
++            const ggml_tensor * add = cgraph->nodes[node_idx + 1];
++            const ggml_tensor * bias = add->src[0] == dst ? add->src[1] : add->src[0];
+ 
+-        d_F0 = ggml_vk_tensor_subbuffer(ctx, bias);
+-        fusion_flags |= MAT_VEC_FUSION_FLAGS_BIAS0;
+-    }
++            d_F0 = ggml_vk_tensor_subbuffer(ctx, bias);
++            fusion_flags |= MAT_VEC_FUSION_FLAGS_BIAS0;
++        }
+ 
+-    vk_subbuffer d_F1 = d_D;
+-    if (ctx->num_additional_fused_ops == 2) {
+-        const ggml_tensor * add = cgraph->nodes[node_idx + 2];
+-        const ggml_tensor * bias = add->src[0] == cgraph->nodes[node_idx + 1] ? add->src[1] : add->src[0];
++        if (ctx->num_additional_fused_ops == 2) {
++            const ggml_tensor * add = cgraph->nodes[node_idx + 2];
++            const ggml_tensor * bias = add->src[0] == cgraph->nodes[node_idx + 1] ? add->src[1] : add->src[0];
+ 
+-        d_F1 = ggml_vk_tensor_subbuffer(ctx, bias);
+-        fusion_flags |= MAT_VEC_FUSION_FLAGS_BIAS1;
++            d_F1 = ggml_vk_tensor_subbuffer(ctx, bias);
++            fusion_flags |= MAT_VEC_FUSION_FLAGS_BIAS1;
++        }
++    } else if (ctx->num_additional_fused_ops > 0) {
++        // elementwise epilog chain, validated by ggml_vk_can_fuse_mmv_epilog
++        bool unary_seen = false;
++        for (int k = 1; k <= ctx->num_additional_fused_ops; ++k) {
++            const ggml_tensor * n = cgraph->nodes[node_idx + k];
++            switch (n->op) {
++            case GGML_OP_SCALE:
++                if (!unary_seen) {
++                    fusion_flags |= MAT_VEC_FUSION_FLAGS_SCALEC0;
++                    fuse_scale0 = ggml_get_op_params_f32(n, 0);
++                } else {
++                    fusion_flags |= MAT_VEC_FUSION_FLAGS_SCALEC1;
++                    fuse_scale1 = ggml_get_op_params_f32(n, 0);
++                }
++                break;
++            case GGML_OP_UNARY:
++                fusion_flags |= ggml_get_unary_op(n) == GGML_UNARY_OP_SILU ? MAT_VEC_FUSION_FLAGS_SILU
++                                                                           : MAT_VEC_FUSION_FLAGS_SIGMOID;
++                unary_seen = true;
++                break;
++            case GGML_OP_MUL: {
++                const ggml_tensor * prev  = cgraph->nodes[node_idx + k - 1];
++                const ggml_tensor * other = n->src[0] == prev ? n->src[1] : n->src[0];
++
++                d_F0 = ggml_vk_tensor_subbuffer(ctx, other);
++                fusion_flags |= MAT_VEC_FUSION_FLAGS_MUL0;
++                break;
++            }
++            default:
++                GGML_ABORT("invalid fused mat-vec epilog op");
++            }
++        }
+     }
+ 
+     ggml_pipeline_request_descriptor_sets(ctx, dmmv, CEIL_DIV(ne12 * ne13, ctx->device->properties.limits.maxComputeWorkGroupCount[1]));
+@@ -9796,7 +9860,7 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
+         const vk_mat_vec_push_constants pc = {
+             (uint32_t)ne00, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)ne01,
+             stride_batch_x, stride_batch_y, stride_batch_d,
+-            fusion_flags, base_work_group_y,
++            fusion_flags, fuse_scale0, fuse_scale1, base_work_group_y,
+             (uint32_t)ne02, (uint32_t)ne12, (uint32_t)r2, (uint32_t)r3,
+         };
+         ggml_vk_dispatch_pipeline(ctx, subctx, dmmv,
+@@ -10690,7 +10754,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
+         const vk_mat_vec_id_push_constants pc = {
+             (uint32_t)ne00, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)ne01,
+             (uint32_t)(ne00 * ne01), stride_batch_y, (uint32_t)(ne20 * ne21),
+-            fusion_flags,
++            fusion_flags, 1.0f, 1.0f,
+             (uint32_t)nei0, (uint32_t)ne11, expert_i1, nbi1
+         };
+         ggml_vk_dispatch_pipeline(ctx, subctx, dmmv,
+@@ -13908,6 +13972,23 @@ static void ggml_vk_topk(ggml_backend_vk_context * ctx, vk_context& subctx, cons
+ 
+     vk_op_topk_push_constants pc { ncols, ncols, ncols, k, nrows, 0, 0 };
+ 
++    // k beyond the shared-memory shaders: single-dispatch radix selection, one
++    // workgroup per row, indices in no particular order (the ggml_top_k contract)
++    if (k > (1u << (num_topk_pipelines - 1)) ||
++        ctx->device->pipeline_topk_f32[(uint32_t)log2f(float(k)) + 1] == nullptr) {
++        vk_pipeline pipeline = ctx->device->pipeline_topk_radix_f32;
++        GGML_ASSERT(pipeline != nullptr);
++
++        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
++
++        vk_subbuffer src0_buf = ggml_vk_tensor_subbuffer(ctx, src0);
++        vk_subbuffer dst_buf  = ggml_vk_tensor_subbuffer(ctx, dst);
++
++        std::array<uint32_t, 3> elements = { nrows*pipeline->wg_denoms[0], 1, 1 };
++        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src0_buf, dst_buf }, pc, elements);
++        return;
++    }
++
+     if (ctx->prealloc_x_need_sync) {
+         ggml_vk_sync_buffers(ctx, subctx);
+     }
+@@ -14369,6 +14450,52 @@ static void ggml_vk_col2im_1d(ggml_backend_vk_context * ctx, vk_context& subctx,
+ // Match the naive mul -> sin -> sqr -> mul -> add chain and run the
+ // dedicated kernel directly. The pattern is validated by
+ // ggml_vk_can_fuse_snake before this call.
++static void ggml_vk_mul_bcast_add_dispatch_fused(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_cgraph * cgraph, int node_idx) {
++    const ggml_tensor * rep = cgraph->nodes[node_idx];
++    // locate the MUL and ADD within the fused span (views may be interleaved)
++    const ggml_tensor * mul = nullptr;
++    ggml_tensor *       add = nullptr;
++    for (int i = node_idx + 1; i <= node_idx + ctx->num_additional_fused_ops; ++i) {
++        ggml_tensor * n = cgraph->nodes[i];
++        if (n->op == GGML_OP_MUL) {
++            mul = n;
++        } else if (n->op == GGML_OP_ADD) {
++            add = n;
++        }
++    }
++    GGML_ASSERT(mul != nullptr && add != nullptr);
++
++    const ggml_tensor * a = rep->src[0];
++    const ggml_tensor * w = mul->src[0] == rep ? mul->src[1] : mul->src[0];
++    const ggml_tensor * r = add->src[0] == mul ? add->src[1] : add->src[0];
++
++    vk_pipeline pipeline = ctx->device->pipeline_mul_bcast_add_f32;
++    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
++
++    vk_subbuffer a_buf = ggml_vk_tensor_subbuffer(ctx, a);
++    vk_subbuffer w_buf = ggml_vk_tensor_subbuffer(ctx, w);
++    vk_subbuffer r_buf = ggml_vk_tensor_subbuffer(ctx, r);
++    vk_subbuffer d_buf = ggml_vk_tensor_subbuffer(ctx, add);
++
++    vk_op_mul_bcast_add_push_constants pc{};
++    pc.ne    = (uint32_t) ggml_nelements(add);
++    pc.ne0   = (uint32_t) add->ne[0];
++    pc.ne1   = (uint32_t) add->ne[1];
++    pc.ne2   = (uint32_t) add->ne[2];
++    pc.ne3   = (uint32_t) add->ne[3];
++    pc.a_ne0 = (uint32_t) a->ne[0];
++    pc.a_ne1 = (uint32_t) a->ne[1];
++    pc.a_ne2 = (uint32_t) a->ne[2];
++    pc.a_ne3 = (uint32_t) a->ne[3];
++    pc.w_ne0 = (uint32_t) w->ne[0];
++    pc.w_ne1 = (uint32_t) w->ne[1];
++    pc.w_ne2 = (uint32_t) w->ne[2];
++    pc.w_ne3 = (uint32_t) w->ne[3];
++
++    std::array<uint32_t, 3> elements = { pc.ne, 1, 1 };
++    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a_buf, w_buf, r_buf, d_buf }, pc, elements);
++}
++
+ static void ggml_vk_snake_dispatch_fused(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_cgraph * cgraph, int node_idx) {
+     const ggml_tensor * mul0 = cgraph->nodes[node_idx + 0];
+     const ggml_tensor * sqr  = cgraph->nodes[node_idx + 2];
+@@ -15657,7 +15784,11 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
+ 
+     switch (node->op) {
+     case GGML_OP_REPEAT:
+-        ggml_vk_repeat(ctx, compute_ctx, src0, node);
++        if (ctx->num_additional_fused_ops) {
++            ggml_vk_mul_bcast_add_dispatch_fused(ctx, compute_ctx, cgraph, node_idx);
++        } else {
++            ggml_vk_repeat(ctx, compute_ctx, src0, node);
++        }
+ 
+         break;
+     case GGML_OP_REPEAT_BACK:
+@@ -16761,6 +16892,97 @@ static bool ggml_vk_is_empty(ggml_tensor * node) {
+     return ggml_is_empty(node) || node->op == GGML_OP_NONE || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE;
+ }
+ 
++// Match MUL_MAT followed by a chain of elementwise epilog ops handled by the
++// mat-vec shaders' fused epilog: an optional SCALE, an optional UNARY (SILU or
++// SIGMOID), an optional SCALE, and an optional trailing MUL, in that order.
++// The shader applies them in the same fixed order: scale0 -> unary -> scale1 -> mul.
++static bool ggml_vk_can_fuse_mmv_epilog(const ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph,
++                                        int node_idx, int num_extra) {
++    GGML_ASSERT(num_extra >= 1 && num_extra <= 3);
++    if (node_idx + num_extra >= cgraph->n_nodes) {
++        return false;
++    }
++    const ggml_tensor * mm = cgraph->nodes[node_idx];
++    if (mm->op != GGML_OP_MUL_MAT) {
++        return false;
++    }
++    // mat-vec only
++    if (ggml_nrows(mm) != 1) {
++        return false;
++    }
++    // restrict to the mul_mat_vec shader family: f16 srcs can route to the
++    // p021/nc shaders, which don't implement the fused epilog
++    const ggml_tensor * src0 = mm->src[0];
++    if (!(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16 || ggml_is_quantized(src0->type))) {
++        return false;
++    }
++    if (mm->type != GGML_TYPE_F32) {
++        return false;
++    }
++
++    enum ggml_op ops[4];
++    ops[0] = GGML_OP_MUL_MAT;
++
++    bool scale_pre  = false;
++    bool scale_post = false;
++    bool unary_seen = false;
++    bool mul_seen   = false;
++    for (int k = 1; k <= num_extra; ++k) {
++        const ggml_tensor * n    = cgraph->nodes[node_idx + k];
++        const ggml_tensor * prev = cgraph->nodes[node_idx + k - 1];
++        ops[k] = n->op;
++        switch (n->op) {
++        case GGML_OP_SCALE:
++            // one scale slot before the unary op and one after
++            if (mul_seen || (unary_seen ? scale_post : scale_pre)) {
++                return false;
++            }
++            // scale with bias isn't handled
++            if (ggml_get_op_params_f32(n, 1) != 0.0f) {
++                return false;
++            }
++            (unary_seen ? scale_post : scale_pre) = true;
++            break;
++        case GGML_OP_UNARY:
++            if (mul_seen || unary_seen) {
++                return false;
++            }
++            if (ggml_get_unary_op(n) != GGML_UNARY_OP_SILU &&
++                ggml_get_unary_op(n) != GGML_UNARY_OP_SIGMOID) {
++                return false;
++            }
++            unary_seen = true;
++            break;
++        case GGML_OP_MUL: {
++            if (mul_seen) {
++                return false;
++            }
++            if (n->src[0] != prev && n->src[1] != prev) {
++                return false;
++            }
++            const ggml_tensor * other = n->src[0] == prev ? n->src[1] : n->src[0];
++            // the shader reuses the D indexing for the mul operand
++            if (other->type != GGML_TYPE_F32 ||
++                !ggml_are_same_shape(n, other) ||
++                !ggml_are_same_stride(n, other) ||
++                get_misalign_bytes(ctx, other) != 0) {
++                return false;
++            }
++            mul_seen = true;
++            break;
++        }
++        default:
++            return false;
++        }
++        // epilog ops are elementwise on the mat-vec output
++        if (n->type != GGML_TYPE_F32 || !ggml_are_same_shape(n, mm)) {
++            return false;
++        }
++    }
++
++    return ggml_can_fuse(cgraph, node_idx, ops, num_extra + 1);
++}
++
+ static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
+     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
+         return false;
+@@ -17119,6 +17341,95 @@ static bool ggml_vk_can_fuse_rope_set_rows(ggml_backend_vk_context * ctx, const
+ // Pattern check for the 5-op Snake fusion: mul -> sin -> sqr -> mul -> add.
+ // Verifies the chain shape, the closure x_in_add == x_in_mul0, and that
+ // the broadcast operands a and inv_b share a [1, C] layout.
++// Match REPEAT + MUL + ADD (empty view ops may be interleaved):
++//   dst = r + repeat(a) * w
++// the hyper-connection combine scatter. On success *num_fused is the span
++// length after the anchor (including any interleaved view nodes).
++static bool ggml_vk_can_fuse_mul_bcast_add(ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph,
++                                           int node_idx, int * num_fused) {
++    GGML_UNUSED(ctx);
++    const ggml_tensor * rep = cgraph->nodes[node_idx];
++    if (rep->op != GGML_OP_REPEAT || rep->type != GGML_TYPE_F32) {
++        return false;
++    }
++    // find the MUL and the ADD, allowing empty (view) nodes in between
++    const int last = std::min(node_idx + 6, cgraph->n_nodes - 1);
++    int mul_idx = -1;
++    int add_idx = -1;
++    for (int i = node_idx + 1; i <= last; ++i) {
++        const ggml_tensor * n = cgraph->nodes[i];
++        if (ggml_op_is_empty(n->op)) {
++            continue;
++        }
++        if (mul_idx < 0) {
++            if (n->op != GGML_OP_MUL) {
++                return false;
++            }
++            mul_idx = i;
++        } else {
++            if (n->op != GGML_OP_ADD) {
++                return false;
++            }
++            add_idx = i;
++            break;
++        }
++    }
++    if (add_idx < 0) {
++        return false;
++    }
++
++    const ggml_tensor * mul = cgraph->nodes[mul_idx];
++    const ggml_tensor * add = cgraph->nodes[add_idx];
++    if (mul->src[0] != rep && mul->src[1] != rep) {
++        return false;
++    }
++    if (add->src[0] != mul && add->src[1] != mul) {
++        return false;
++    }
++    const ggml_tensor * a = rep->src[0];
++    const ggml_tensor * w = mul->src[0] == rep ? mul->src[1] : mul->src[0];
++    const ggml_tensor * r = add->src[0] == mul ? add->src[1] : add->src[0];
++
++    // intermediates must have a single use and not be graph outputs
++    if (!ggml_node_has_n_uses(cgraph, node_idx, 1) ||
++        !ggml_node_has_n_uses(cgraph, mul_idx, 1)) {
++        return false;
++    }
++    if ((rep->flags & GGML_TENSOR_FLAG_OUTPUT) || (mul->flags & GGML_TENSOR_FLAG_OUTPUT)) {
++        return false;
++    }
++    // all f32
++    if (mul->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32 ||
++        a->type   != GGML_TYPE_F32 || w->type   != GGML_TYPE_F32 || r->type != GGML_TYPE_F32) {
++        return false;
++    }
++    // mul and add preserve the repeat's (dst) shape; r matches the output exactly
++    if (!ggml_are_same_shape(mul, rep) || !ggml_are_same_shape(add, rep) || !ggml_are_same_shape(r, add)) {
++        return false;
++    }
++    // the shader indexes by dimension sizes, so everything must be contiguous
++    if (!ggml_is_contiguous(rep) || !ggml_is_contiguous(mul) || !ggml_is_contiguous(add) ||
++        !ggml_is_contiguous(a)   || !ggml_is_contiguous(w)   || !ggml_is_contiguous(r)) {
++        return false;
++    }
++    // both broadcast operands must repeat onto the output shape
++    if (!ggml_can_repeat(a, add) || !ggml_can_repeat(w, add)) {
++        return false;
++    }
++    // anything interleaved in the span must be an empty view op
++    for (int i = node_idx + 1; i < add_idx; ++i) {
++        if (i == mul_idx) {
++            continue;
++        }
++        if (!ggml_op_is_empty(cgraph->nodes[i]->op)) {
++            return false;
++        }
++    }
++
++    *num_fused = add_idx - node_idx;
++    return true;
++}
++
+ static bool ggml_vk_can_fuse_snake(ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph, int node_idx) {
+     GGML_UNUSED(ctx);
+     if (!ggml_can_fuse(cgraph, node_idx, snake_pattern)) {
+@@ -17478,6 +17789,24 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
+                 fusion_string = "MUL_MAT_ADD";
+                 op_srcs_fused_elementwise[0] = false;
+                 op_srcs_fused_elementwise[1] = true;
++            } else if (ggml_vk_can_fuse_mmv_epilog(ctx, cgraph, i, 3)) {
++                ctx->num_additional_fused_ops = 3;
++                fusion_string = "MUL_MAT_EPILOG";
++                op_srcs_fused_elementwise[0] = false;
++                op_srcs_fused_elementwise[1] = true;
++                op_srcs_fused_elementwise[2] = true;
++                op_srcs_fused_elementwise[3] = true;
++            } else if (ggml_vk_can_fuse_mmv_epilog(ctx, cgraph, i, 2)) {
++                ctx->num_additional_fused_ops = 2;
++                fusion_string = "MUL_MAT_EPILOG";
++                op_srcs_fused_elementwise[0] = false;
++                op_srcs_fused_elementwise[1] = true;
++                op_srcs_fused_elementwise[2] = true;
++            } else if (ggml_vk_can_fuse_mmv_epilog(ctx, cgraph, i, 1)) {
++                ctx->num_additional_fused_ops = 1;
++                fusion_string = "MUL_MAT_EPILOG";
++                op_srcs_fused_elementwise[0] = false;
++                op_srcs_fused_elementwise[1] = true;
+             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT_ID, GGML_OP_ADD_ID, GGML_OP_MUL })) {
+                 ctx->num_additional_fused_ops = 2;
+                 fusion_string = "MUL_MAT_ID_ADD_ID_MUL";
+@@ -17541,6 +17870,15 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
+                 op_srcs_fused_elementwise[0] = false;
+                 op_srcs_fused_elementwise[1] = false;
+                 op_srcs_fused_elementwise[2] = false;
++            } else if (int mba_span = 0; ggml_vk_can_fuse_mul_bcast_add(ctx, cgraph, i, &mba_span)) {
++                ctx->num_additional_fused_ops = mba_span;
++                fusion_string = "REPEAT_MUL_ADD";
++                // elementwise=true: the shader reads data_r[idx] into a register before
++                // writing data_d[idx], so the common in-place case (residual buffer reused
++                // for the output) is safe under exact aliasing. The broadcast operands can
++                // never exactly alias the (larger) output, so partial overlaps still
++                // disable fusion via the overlap check.
++                std::fill_n(op_srcs_fused_elementwise, mba_span + 1, true);
+             } else if (ggml_vk_can_fuse_snake(ctx, cgraph, i)) {
+                 ctx->num_additional_fused_ops = 4;
+                 fusion_string = "SNAKE";
+@@ -17848,6 +18186,12 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph *
+         if (keep_pattern(snake_pattern)) {
+             continue;
+         }
++        if (keep_pattern(mul_bcast_add_pattern)) {
++            continue;
++        }
++        if (keep_pattern(mul_bcast_add_pattern_novw)) {
++            continue;
++        }
+ 
+         // First, grab the next unused node.
+         current_set.push_back(first_unused);
+@@ -17858,8 +18202,35 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph *
+         // that we support (e.g. RMS_NORM + MUL).
+         // This first pass only grabs "real" (non-view nodes). Second pass grabs view nodes.
+         // The goal is to not interleave real and view nodes in a way that breaks fusion.
++        // Dependent op pairs that the backend can fuse (or chains thereof). A node may
++        // join the current set even when it depends on the previous node, if the pair is
++        // fusable - and the scan window is extended to keep such chains intact.
++        auto const &is_fusion_pair = [](const ggml_tensor *a, const ggml_tensor *b) -> bool {
++            return (a->op == GGML_OP_RMS_NORM   && b->op == GGML_OP_MUL)    ||
++                   (a->op == GGML_OP_MUL_MAT    && b->op == GGML_OP_ADD)    ||
++                   (a->op == GGML_OP_MUL_MAT_ID && b->op == GGML_OP_ADD_ID) ||
++                   (a->op == GGML_OP_MUL_MAT_ID && b->op == GGML_OP_MUL)    ||
++                   (a->op == GGML_OP_ADD        && b->op == GGML_OP_ADD)    ||
++                   (a->op == GGML_OP_SSM_CONV   && b->op == GGML_OP_ADD)    ||
++                   (a->op == GGML_OP_SSM_CONV   && b->op == GGML_OP_UNARY)  ||
++                   // mat-vec elementwise epilog chains (see ggml_vk_can_fuse_mmv_epilog)
++                   (a->op == GGML_OP_MUL_MAT    && b->op == GGML_OP_SCALE)  ||
++                   (a->op == GGML_OP_MUL_MAT    && b->op == GGML_OP_UNARY)  ||
++                   (a->op == GGML_OP_MUL_MAT    && b->op == GGML_OP_MUL)    ||
++                   (a->op == GGML_OP_SCALE      && b->op == GGML_OP_UNARY)  ||
++                   (a->op == GGML_OP_UNARY      && b->op == GGML_OP_SCALE)  ||
++                   (a->op == GGML_OP_UNARY      && b->op == GGML_OP_MUL);
++        };
++
+         const int NUM_TO_CHECK = 20;
+-        for (int j = first_unused+1; j < std::min(first_unused + NUM_TO_CHECK, graph->n_nodes); ++j) {
++        for (int j = first_unused+1; j < graph->n_nodes; ++j) {
++            // scan a fixed window, but follow a fusable chain past its edge so the
++            // chain isn't split across sets (which would break fusion)
++            if (j >= first_unused + NUM_TO_CHECK &&
++                !(j == current_set.back() + 1 &&
++                  is_fusion_pair(graph->nodes[current_set.back()], graph->nodes[j]))) {
++                break;
++            }
+             if (used[j]) {
+                 continue;
+             }
+@@ -17872,20 +18243,16 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph *
+                 match_pattern(topk_moe_sqrt_softplus_norm_bias, j) ||
+                 match_pattern(topk_moe_early_softmax, j) ||
+                 match_pattern(topk_moe_late_softmax, j) ||
+-                match_pattern(snake_pattern, j)) {
++                match_pattern(snake_pattern, j) ||
++                match_pattern(mul_bcast_add_pattern, j) ||
++                match_pattern(mul_bcast_add_pattern_novw, j)) {
+                 continue;
+             }
+             bool ok = true;
+             for (int c = first_unused; c < j; ++c) {
+                 if (!used[c] &&
+                     is_src_of(graph->nodes[j], graph->nodes[c]) &&
+-                    !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_RMS_NORM && graph->nodes[j]->op == GGML_OP_MUL) &&
+-                    !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_MUL_MAT && graph->nodes[j]->op == GGML_OP_ADD) &&
+-                    !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_MUL_MAT_ID && graph->nodes[j]->op == GGML_OP_ADD_ID) &&
+-                    !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_MUL_MAT_ID && graph->nodes[j]->op == GGML_OP_MUL) &&
+-                    !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_ADD && graph->nodes[j]->op == GGML_OP_ADD) &&
+-                    !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_SSM_CONV && graph->nodes[j]->op == GGML_OP_ADD) &&
+-                    !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_SSM_CONV && graph->nodes[j]->op == GGML_OP_UNARY)) {
++                    !(j == c+1 && c == current_set.back() && is_fusion_pair(graph->nodes[c], graph->nodes[j]))) {
+                     ok = false;
+                     break;
+                 }
+@@ -18674,12 +19041,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
+                 if (!ggml_is_contiguous(op) || !ggml_is_contiguous(op->src[0])) {
+                     return false;
+                 }
+-                // We could potentially support larger, using argsort to sort the
+-                // whole thing. Not clear if this is needed.
+                 uint32_t min_pipeline = (uint32_t)log2f(float(op->ne[0])) + 1;
+                 if (min_pipeline >= num_topk_pipelines ||
+                     !device->pipeline_topk_f32[min_pipeline]) {
+-                    return false;
++                    // k beyond the shared-memory shaders runs the radix selection path
++                    return true;
+                 }
+             }
+             return true;
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_base.glsl b/ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_base.glsl
+index 4aeda68c7..972d2db7a 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_base.glsl
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_base.glsl
+@@ -25,6 +25,8 @@ layout (push_constant) uniform parameter
+     uint batch_stride_d;
+ 
+     uint fusion_flags;
++    float fuse_scale0;
++    float fuse_scale1;
+ 
+ #ifdef MUL_MAT_ID
+     uint nei0;
+@@ -86,6 +88,28 @@ void get_offsets(out uint a_offset, out uint b_offset, out uint d_offset) {
+ #endif
+ }
+ 
++// Fused elementwise epilog for MUL_MAT + SCALE/SILU/SIGMOID/MUL chains.
++// Applied in fixed order: scale0 -> unary -> scale1 -> mul (see ggml_vk_can_fuse_mmv_epilog).
++FLOAT_TYPE apply_fused_epilog(FLOAT_TYPE v, const uint idx) {
++    if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_SCALEC0) != 0) {
++        v *= FLOAT_TYPE(p.fuse_scale0);
++    }
++    if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_SILU) != 0) {
++        const float x = float(v);
++        v = FLOAT_TYPE(x / (1.0f + exp(-x)));
++    }
++    if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_SIGMOID) != 0) {
++        v = FLOAT_TYPE(1.0f / (1.0f + exp(-float(v))));
++    }
++    if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_SCALEC1) != 0) {
++        v *= FLOAT_TYPE(p.fuse_scale1);
++    }
++    if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_MUL0) != 0) {
++        v *= FLOAT_TYPE(data_fuse0[idx]);
++    }
++    return v;
++}
++
+ layout (constant_id = 0) const uint BLOCK_SIZE = 32;
+ layout (constant_id = 1) const uint NUM_ROWS = 1;
+ layout (constant_id = 2) const uint NUM_COLS = 1;
+@@ -120,6 +144,7 @@ void reduce_result(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t
+                 if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS1) != 0) {
+                     temp[j][n] += FLOAT_TYPE(data_fuse1[j*p.batch_stride_d + d_offset + first_row + n]);
+                 }
++                temp[j][n] = apply_fused_epilog(temp[j][n], j*p.batch_stride_d + d_offset + first_row + n);
+ #endif
+                 data_d[j*p.batch_stride_d + d_offset + first_row + n] = D_TYPE(temp[j][n]);
+             }
+@@ -175,6 +200,7 @@ void reduce_result(FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t d_offs
+                 if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS1) != 0) {
+                     temp[j][n] += FLOAT_TYPE(data_fuse1[j*p.batch_stride_d + d_offset + first_row + n]);
+                 }
++                temp[j][n] = apply_fused_epilog(temp[j][n], j*p.batch_stride_d + d_offset + first_row + n);
+ #endif
+                 data_d[j*p.batch_stride_d + d_offset + first_row + n] = D_TYPE(temp[j][n]);
+             }
+@@ -220,6 +246,7 @@ void reduce_result(FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t d_offs
+                 if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS1) != 0) {
+                     tmpsh[j][n][0] += FLOAT_TYPE(data_fuse1[j*p.batch_stride_d + d_offset + first_row + n]);
+                 }
++                tmpsh[j][n][0] = apply_fused_epilog(tmpsh[j][n][0], j*p.batch_stride_d + d_offset + first_row + n);
+ #endif
+                 data_d[j*p.batch_stride_d + d_offset + first_row + n] = D_TYPE(tmpsh[j][n][0]);
+             }
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iface.glsl b/ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iface.glsl
+index e8d053cdd..d06295891 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iface.glsl
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iface.glsl
+@@ -4,6 +4,11 @@
+ #define MAT_VEC_FUSION_FLAGS_BIAS1 0x2
+ #define MAT_VEC_FUSION_FLAGS_SCALE0 0x4
+ #define MAT_VEC_FUSION_FLAGS_SCALE1 0x8
++#define MAT_VEC_FUSION_FLAGS_SCALEC0 0x10
++#define MAT_VEC_FUSION_FLAGS_SILU 0x20
++#define MAT_VEC_FUSION_FLAGS_SIGMOID 0x40
++#define MAT_VEC_FUSION_FLAGS_SCALEC1 0x80
++#define MAT_VEC_FUSION_FLAGS_MUL0 0x100
+ 
+ layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
+ #if defined(A_TYPEV4)
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+index 0da943da9..d336346e2 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+@@ -1026,6 +1026,7 @@ void process_shaders() {
+ 
+     string_to_spv("topk_argsort_f32", "topk_argsort.comp", {{"A_TYPE", "float"}});
+     string_to_spv("topk_nary_search_f32", "topk_nary_search.comp", {{"A_TYPE", "float"}});
++    string_to_spv("topk_radix_f32", "topk_radix.comp", {});
+ 
+     string_to_spv("argmax_f32", "argmax.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "int"}}));
+     string_to_spv("sum_rows_f32", "sum_rows.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
+@@ -1058,6 +1059,7 @@ void process_shaders() {
+     string_to_spv("col2im_1d_f16",  "col2im_1d.comp", {{"DATA_A_F16", "1"},  {"A_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}});
+     string_to_spv("col2im_1d_bf16", "col2im_1d.comp", {{"DATA_A_BF16", "1"}, {"A_TYPE", "uint16_t"},  {"D_TYPE", "uint16_t"}});
+ 
++    string_to_spv("mul_bcast_add_f32", "mul_bcast_add.comp", {});
+     string_to_spv("snake_f32",  "snake.comp", {{"DATA_A_F32", "1"},  {"A_TYPE", "float"},     {"D_TYPE", "float"}});
+     string_to_spv("snake_f16",  "snake.comp", {{"DATA_A_F16", "1"},  {"A_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}});
+     string_to_spv("snake_bf16", "snake.comp", {{"DATA_A_BF16", "1"}, {"DATA_D_BF16", "1"}, {"A_TYPE", "uint16_t"},  {"D_TYPE", "uint16_t"}});
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 8fafcd153..33a4fc24c 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1868,16 +1868,33 @@ void llama_kv_cache::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, st
+ 
+     for (uint32_t s = 0; s < n_stream; ++s) {
+         // p_max inclusive: an embd token looks up cells at its own (shared) position
+-        v_cells[s].for_each_token_in(seqs, 0, p_max + 1,
++        v_cells[s].for_each_token_in(seqs, w0, p_max + 1,
+             [&](llama_seq_id seq_id, llama_pos pos, llama_token tok) {
+-                if (pos >= w0) {
+-                    hist[key(seq_id, pos)] = tok;
+-                } else if (pos > below[seq_id].first) {
+-                    below[seq_id] = { pos, tok };
+-                }
++                hist[key(seq_id, pos)] = tok;
+             });
+     }
+ 
++    // below[] only answers when an M-RoPE gap leaves the window empty, so it costs a pass of
++    // its own that contiguous positions never pay
++    bool below_ready = false;
++
++    const auto ensure_below = [&]() {
++        if (below_ready) {
++            return;
++        }
++
++        below_ready = true;
++
++        for (uint32_t s = 0; s < n_stream; ++s) {
++            v_cells[s].for_each_token_in(seqs, 0, w0,
++                [&](llama_seq_id seq_id, llama_pos pos, llama_token tok) {
++                    if (pos > below[seq_id].first) {
++                        below[seq_id] = { pos, tok };
++                    }
++                });
++        }
++    };
++
+     // the token at pos p, or the nearest earlier one when p falls in an M-RoPE gap
+     const auto lookup = [&](llama_seq_id seq_id, llama_pos p) -> llama_token {
+         for (llama_pos q = p; q >= w0; --q) {
+@@ -1886,6 +1903,9 @@ void llama_kv_cache::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, st
+                 return it->second;
+             }
+         }
++
++        ensure_below();
++
+         return below[seq_id].second;
+     };
+ 
+diff --git a/src/llama-kv-cells.h b/src/llama-kv-cells.h
+index 5167c037d..ad1c91b72 100644
+--- a/src/llama-kv-cells.h
++++ b/src/llama-kv-cells.h
+@@ -10,6 +10,10 @@
+ #include <set>
+ #include <vector>
+ 
++#if defined(_MSC_VER)
++#include <intrin.h>
++#endif
++
+ struct llama_kv_cell_ext {
+     // 2D spatial positions, typically used for M-RoPE
+     llama_pos x = 0;
+@@ -31,6 +35,106 @@ struct llama_kv_cell_ext {
+     }
+ };
+ 
++// index of the lowest set bit, and of the highest; the word is never zero here
++#if defined(_MSC_VER)
++static inline uint32_t llama_kv_ctz64(uint64_t x) {
++    unsigned long r;
++    _BitScanForward64(&r, x);
++    return (uint32_t) r;
++}
++
++static inline uint32_t llama_kv_clz64(uint64_t x) {
++    unsigned long r;
++    _BitScanReverse64(&r, x);
++    return (uint32_t) r;
++}
++#else
++static inline uint32_t llama_kv_ctz64(uint64_t x) {
++    return (uint32_t) __builtin_ctzll(x);
++}
++
++static inline uint32_t llama_kv_clz64(uint64_t x) {
++    return (uint32_t) (63 - __builtin_clzll(x));
++}
++#endif
++
++// a dense set of cell indices, kept as a bitmap so that a full pass reads words instead of
++// chasing tree nodes. the cells it tracks are a large fraction of the cache, so the bitmap is
++// both smaller and faster to walk than a node per index
++class llama_kv_idx_set {
++public:
++    void resize(uint32_t n) {
++        bits.assign((n + 63)/64, 0);
++        n_set = 0;
++    }
++
++    void clear() {
++        std::fill(bits.begin(), bits.end(), 0);
++        n_set = 0;
++    }
++
++    void insert(uint32_t i) {
++        uint64_t & w = bits[i/64];
++        const uint64_t b = 1ull << (i%64);
++
++        n_set += (w & b) == 0;
++        w |= b;
++    }
++
++    void erase(uint32_t i) {
++        uint64_t & w = bits[i/64];
++        const uint64_t b = 1ull << (i%64);
++
++        n_set -= (w & b) != 0;
++        w &= ~b;
++    }
++
++    bool contains(uint32_t i) const {
++        return (bits[i/64] >> (i%64)) & 1;
++    }
++
++    uint32_t size()  const { return n_set; }
++    bool     empty() const { return n_set == 0; }
++
++    uint32_t first() const {
++        for (size_t w = 0; w < bits.size(); ++w) {
++            if (bits[w]) {
++                return 64*w + llama_kv_ctz64(bits[w]);
++            }
++        }
++
++        return 0;
++    }
++
++    uint32_t last() const {
++        for (size_t w = bits.size(); w-- > 0; ) {
++            if (bits[w]) {
++                return 64*w + llama_kv_clz64(bits[w]);
++            }
++        }
++
++        return 0;
++    }
++
++    // visits the indices in ascending order
++    template <class F>
++    void for_each(F && f) const {
++        for (size_t w = 0; w < bits.size(); ++w) {
++            uint64_t m = bits[w];
++
++            while (m) {
++                f((uint32_t) (64*w + llama_kv_ctz64(m)));
++                m &= m - 1;
++            }
++        }
++    }
++
++private:
++    std::vector<uint64_t> bits;
++
++    uint32_t n_set = 0;
++};
++
+ // meta information about KV cells that can be part of multiple sequences at the same time
+ // TODO: add unit tests
+ class llama_kv_cells {
+@@ -69,6 +173,7 @@ public:
+         ext.resize(n);
+         shift.resize(n);
+         seq.resize(n);
++        used.resize(n);
+ 
+         reset();
+     }
+@@ -87,13 +192,13 @@ public:
+     // the index of the first cell that is used
+     // return 0 if no cells are used
+     uint32_t used_min() const {
+-        return used.empty() ? 0 : *used.begin();
++        return used.empty() ? 0 : used.first();
+     }
+ 
+     // the index of the last cell that is used + 1
+     // return 0 if no cells are used
+     uint32_t used_max_p1() const {
+-        return used.empty() ? 0 : *used.rbegin() + 1;
++        return used.empty() ? 0 : used.last() + 1;
+     }
+ 
+     bool get_has_shift() const {
+@@ -314,22 +419,24 @@ public:
+     // note: used by n-gram input embeddings to recover the tokens preceding a ubatch
+     template<typename F>
+     void for_each_token_in(const std::bitset<LLAMA_MAX_SEQ> & seqs, llama_pos p0, llama_pos p1, F && f) const {
+-        for (const auto & i : used) {
++        used.for_each([&](uint32_t i) {
+             if (pos[i] < p0 || pos[i] >= p1) {
+-                continue;
++                return;
+             }
+ 
+             const auto m = seq[i] & seqs;
+-            if (m.none()) {
+-                continue;
+-            }
+ 
+-            for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
++            // a cell carries a handful of sequences at most, so stop once they are all seen
++            // instead of walking the whole LLAMA_MAX_SEQ width
++            size_t left = m.count();
++
++            for (llama_seq_id s = 0; left > 0 && s < (llama_seq_id) LLAMA_MAX_SEQ; ++s) {
+                 if (m.test(s)) {
+                     f(s, pos[i], ext[i].tok);
++                    --left;
+                 }
+             }
+-        }
++        });
+     }
+ 
+     // note: call only if the cell is not empty and the seq_id is not in the cell
+@@ -486,7 +593,7 @@ private:
+     bool has_shift = false;
+ 
+     // set of indices of used cells (i.e. pos[i] != -1, allowed to not have any seq_id)
+-    std::set<uint32_t> used;
++    llama_kv_idx_set used;
+ 
+     std::vector<llama_pos> pos;
+ 
+diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
+index abf6a0502..699a82cef 100644
+--- a/src/models/qwen4exp.cpp
++++ b/src/models/qwen4exp.cpp
+@@ -243,9 +243,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_hc_mix(
+     gated = ggml_reshape_3d(ctx0, gated, n_embd, hc, nt);
+ 
+     // collapse the streams by their mean
++    // The first add materializes a contiguous result; avoid copying the first
++    // view into a full-size buffer before immediately adding to it.
+     ggml_tensor * mixed = ggml_view_2d(ctx0, gated, n_embd, nt,
+             ggml_row_size(gated->type, n_embd) * hc, 0);
+-    mixed = ggml_cont(ctx0, mixed);
+     for (int64_t c = 1; c < hc; ++c) {
+         ggml_tensor * s = ggml_view_2d(ctx0, gated, n_embd, nt,
+                 ggml_row_size(gated->type, n_embd) * hc,
+@@ -256,7 +257,19 @@ ggml_tensor * llama_model_qwen4exp::graph::build_hc_mix(
+     cb(mixed, "hc_mixed", il);
+ 
+     if (inject) {
+-        *inject = build_lora_mm(w_inject, xn);
++        // Fold the combine-gate activation onto the inject mat-vec so Vulkan
++        // can fuse mat-vec + scale + sigmoid + scale into one dispatch.
++        ggml_tensor * w;
++        if (nt > 8) {
++            // For batched prefill, transpose the skinny [4, hc_dim] inject
++            // projection onto Vulkan's multi-column mat-vec path.
++            w = ggml_mul_mat(ctx0, xn, w_inject);
++            w = ggml_cont(ctx0, ggml_transpose(ctx0, w));
++        } else {
++            w = build_lora_mm(w_inject, xn);
++        }
++        w = ggml_scale(ctx0, ggml_sigmoid(ctx0, ggml_scale(ctx0, w, 1.0f / (float) hc)), 2.0f);
++        *inject = w;
+         cb(*inject, "hc_inject", il);
+     }
+ 
+@@ -271,10 +284,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_hc_combine(
+     const int64_t hc = hparams.dsv4_hc_mult;
+     const int64_t nt = residual->ne[2];
+ 
+-    // 2*sigmoid centres the scatter weights on 1, so a zero injection is a plain residual add
+-    ggml_tensor * w = ggml_sigmoid(ctx0, ggml_scale(ctx0, inject, 1.0f / (float) hc));
+-    w = ggml_scale(ctx0, w, 2.0f);
+-    w = ggml_reshape_3d(ctx0, w, 1, hc, nt);
++    // 2*sigmoid was applied in build_hc_mix and fused with the inject mat-vec.
++    ggml_tensor * w = ggml_reshape_3d(ctx0, inject, 1, hc, nt);
+ 
+     ggml_tensor * b = ggml_reshape_3d(ctx0, block_out, n_embd, 1, nt);
+     b = ggml_repeat_4d(ctx0, b, n_embd, hc, nt, 1);
+@@ -548,11 +559,11 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
+     // mean over the block members; r is small, so summing slices beats a transpose plus sum_rows
+     ggml_tensor * pooled = nullptr;
+     for (int64_t i = 0; i < r; ++i) {
+-        ggml_tensor * slice = ggml_cont(ctx0,
+-                ggml_view_3d(ctx0, members, idx_dim, n_blocks, n_stream,
+-                        members->nb[2], members->nb[3], i*members->nb[1]));
++        ggml_tensor * slice = ggml_view_3d(ctx0, members, idx_dim, n_blocks, n_stream,
++                members->nb[2], members->nb[3], i*members->nb[1]);
+         pooled = pooled ? ggml_add(ctx0, pooled, slice) : slice;
+     }
++    GGML_ASSERT(r >= 2);
+     pooled = ggml_scale(ctx0, pooled, 1.0f/(float) r);
+     cb(pooled, "indexer_k_pooled", il);
+ 

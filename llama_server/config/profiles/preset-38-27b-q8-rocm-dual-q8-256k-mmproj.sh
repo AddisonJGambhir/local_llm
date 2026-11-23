@@ -245,6 +245,7 @@ LLAMA_EXTRA_ARGS=(
     --batch-size 6144
     --no-mmap
     --mmproj "$LLAMA_SERVER_ROOT/models/mmproj-BF16.gguf"
+    --no-mmproj-offload
     --reasoning-preserve
 )
 

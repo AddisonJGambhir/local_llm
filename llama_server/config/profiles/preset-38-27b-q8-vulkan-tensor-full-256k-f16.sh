@@ -123,6 +123,9 @@ LLAMA_EXTRA_ARGS=(
     --tensor-split 49,51
     --batch-size 2048
     --no-mmap
+    # Vision on the CPU (2026-11-22): the tower stays in system RAM, so the XTX budget above is untouched.
+    --mmproj "$LLAMA_SERVER_ROOT/models/mmproj-BF16.gguf"
+    --no-mmproj-offload
     # --reasoning-preserve REMOVED: the PR #25051 base (2026-06-29) predates
     # this flag and rejects it with "invalid argument".
 )

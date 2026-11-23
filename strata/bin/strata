@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+# strata - start/stop/inspect the Strata server on 127.0.0.1:1234 (model id "local"), like llamaserver.
+#
+#   strata                 interactive menu: pick a model, it starts with that model's measured-best config
+#   strata start MODEL     start MODEL (switches over if another Strata model is running)
+#   strata stop            stop the Strata server this command started
+#   strata restart [MODEL] stop + start (default: the model that was running)
+#   strata status          what's running, health, VRAM per card, RAM, guard, Docker
+#   strata watch           live view: reading/generating + pp/tg speed every 3 s (Ctrl+C detaches)
+#   strata logs            follow the running model's engine log
+#   strata list            the models and their measured speeds
+#
+# Safety: a guard runs beside the engine and stops ONLY the engine if free RAM drops below 6 GiB
+# or the XTX (it drives the desktop) passes 24,300 MiB of VRAM. Start refuses to run next to
+# llama-server on :1234 (run `llamakill` first).
+set -uo pipefail
+
+S="$HOME/Desktop/strata"
+PORT="${STRATA_PORT:-1234}"
+STATE="$S/logs"
+PIDF="$STATE/.server.pid"; CURF="$STATE/.current"; GUARDF="$STATE/.guard.pid"
+XTX=/sys/bus/pci/devices/0000:03:00.0
+R97=/sys/bus/pci/devices/0000:14:00.0
+XTX_LIMIT_MIB=24300
+RAM_FLOOR_MIB=6144
+
+# name | label | min free RAM to start (GiB) | measured speed (fresh 8.5K prompt / 1,400 tokens, quiet CPU, Docker off)
+MODELS=(
+  "iq4xs|UD-IQ4_XS   both GPUs - fastest 4-bit (88.9% top-token vs Q8_0), engine 0.2.19|32|0.2.19 split 26: BetterBench 110.3 tg, pp 986/1,740/1,963 (2K/8K/16K), 262K (sampled, thinking on; 0.1.44: ~560 / ~48.5)"
+)
+
+c_b=$'\e[1m'; c_d=$'\e[2m'; c_g=$'\e[32m'; c_y=$'\e[33m'; c_r=$'\e[31m'; c_0=$'\e[0m'
+die() { echo "${c_r}strata: $*${c_0}" >&2; exit 1; }
+field() { local IFS='|'; read -r -a f <<<"$1"; echo "${f[$2]}"; }
+find_model() { for m in "${MODELS[@]}"; do [[ "$(field "$m" 0)" == "$1" ]] && { echo "$m"; return 0; }; done; return 1; }
+mem_avail_mib() { awk '/^MemAvailable/{print int($2/1024)}' /proc/meminfo; }
+vram_mib() { echo $(( $(cat "$1/mem_info_vram_used") / 1048576 )); }
+server_pids() { pgrep -f '[s]erve\.server --engine strata'; }
+engine_pid() { pgrep -f '[b]uild-hip-dual/strata --serve|[e]ngine/strata --serve|[s]trata-0213/build-hip/strata --serve' | head -1; }
+# the checkout that runs a config: the one its "exe" was built in (2026-11-12: iq4xs runs 0.2.13.1 from ~/Desktop/strata-0213,
+# the other configs still run 0.1.44.1 from ~/Desktop/strata - each engine needs its own serve/ and .venv)
+cfg_root() { local r; r=$(python3 -c 'import json,os,sys;print(os.path.dirname(os.path.dirname(json.load(open(sys.argv[1]))["exe"])))' "$1" 2>/dev/null)
+             [[ -n "$r" && -d "$r/serve" && -x "$r/.venv/bin/python" ]] && { echo "$r"; return; }
+             # 0.2.16+ layout: <checkout>/engine/build/<preset>/strata, server in <checkout>/terminal
+             local t; t=$(python3 -c 'import json,sys;e=json.load(open(sys.argv[1]))["exe"];print(e.split("/engine/")[0]+"/terminal" if "/engine/" in e else "")' "$1" 2>/dev/null)
+             [[ -n "$t" && -d "$t/serve" && -x "$t/.venv/bin/python" ]] && echo "$t" || echo "$S"; }
+health() { curl -s -m 2 "http://127.0.0.1:$PORT/health" 2>/dev/null; }
+docker_up() { pgrep -f '[q]emu-system-x86' >/dev/null; }
+
+cmd_list() {
+  echo "${c_b}Models${c_0} (all serve as 'local' on :$PORT)"
+  local i=1
+  for m in "${MODELS[@]}"; do
+    local ctx kv; read -r ctx kv < <(python3 -c 'import json,sys;a=json.load(open(sys.argv[1]))["args"];g=lambda k,d="?":a[a.index(k)+1] if k in a else d;print(round(int(g("--max-context","0"))/1024), g("--kv","f16"))' "$S/configs/$(field "$m" 0).json" 2>/dev/null)
+    printf "  %d) %-5s %s\n       ctx %sK · KV %s · vision (CPU sidecar)\n       ${c_d}%s${c_0}\n" "$i" "$(field "$m" 0)" "$(field "$m" 1)" "${ctx:-?}" "${kv:-?}" "$(field "$m" 3)"; i=$((i+1))
+  done
+}
+
+cmd_stop() {
+  local pids; pids=$(server_pids)
+  if [[ -z "$pids" && -z "$(engine_pid)" && -z "$(pgrep -f '[s]trata-vision --mmproj')" ]]; then
+    echo "strata: no Strata server running"; rm -f "$PIDF" "$GUARDF"; return 0
+  fi
+  echo "strata: stopping $(cat "$CURF" 2>/dev/null || echo server) ..."
+  [[ -n "$pids" ]] && kill -TERM $pids 2>/dev/null
+  for _ in $(seq 60); do [[ -z "$(engine_pid)" && -z "$(server_pids)" ]] && break; sleep 1; done
+  # leftovers: an engine whose server died (it keeps its VRAM and pinned RAM) and the image encoder
+  local e; for e in $(pgrep -f '[b]uild-hip-dual/strata --serve|[e]ngine/strata --serve|[s]trata-vision --mmproj'); do
+    kill -KILL "$e" 2>/dev/null
+  done; sleep 1
+  [[ -f "$GUARDF" ]] && kill "$(cat "$GUARDF")" 2>/dev/null
+  rm -f "$PIDF" "$GUARDF"
+  for _ in $(seq 20); do ss -Htln "( sport = :$PORT )" | grep -q . || break; sleep 1; done
+  echo "${c_g}strata: stopped${c_0}"
+}
+
+cmd_guard() {   # internal: runs detached beside the engine
+  local why=""
+  while e=$(engine_pid); [[ -n "$e" ]]; do
+    local a x; a=$(mem_avail_mib); x=$(vram_mib "$XTX")
+    if (( a < RAM_FLOOR_MIB )); then why="free RAM ${a} MiB < ${RAM_FLOOR_MIB}"; fi
+    if (( x > XTX_LIMIT_MIB )); then why="XTX VRAM ${x} MiB > ${XTX_LIMIT_MIB}"; fi
+    if [[ -n "$why" ]]; then
+      echo "$(date '+%F %T') GUARD: $why - stopping the server and engine $e" >> "$STATE/guard.log"
+      # stop the server too: on its own, the server restarts a dead engine with no guard beside it
+      # shellcheck disable=SC2046  # several pids, split on purpose
+      kill -TERM $(server_pids) 2>/dev/null; kill -TERM "$e"; sleep 5
+      kill -0 "$e" 2>/dev/null && kill -KILL "$e"; rm -f "$PIDF"
+      notify-send -u critical "Strata stopped" "$why" 2>/dev/null || true
+      exit 1
+    fi
+    sleep 1
+  done
+}
+
+cmd_start() {
+  local name=${1:-}; [[ -n "$name" ]] || die "which model? ($(for m in "${MODELS[@]}"; do printf '%s ' "$(field "$m" 0)"; done))"
+  local m; m=$(find_model "$name") || die "unknown model '$name' - see: strata list"
+  local cfg="$S/configs/$name.json" need; need=$(field "$m" 2)
+  [[ -f "$cfg" ]] || die "missing config $cfg"
+
+  # port 1234: hand over from another Strata model; refuse to fight llama-server
+  if [[ -n "$(server_pids)" ]]; then cmd_stop; fi
+  if ss -Htln "( sport = :$PORT )" | grep -q .; then
+    die "port $PORT is in use (llama-server?) - run 'llamakill' first"
+  fi
+
+  local avail; avail=$(( $(mem_avail_mib) / 1024 ))
+  if (( avail < need )) && [[ "${STRATA_FORCE:-0}" != 1 ]]; then
+    die "only ${avail} GiB RAM free, $name needs ~${need} GiB (close apps / stop Docker), or STRATA_FORCE=1 strata start $name"
+  fi
+  docker_up && echo "${c_d}strata: Docker Desktop is running (measured cost: iq4xs ~2%, q4kxl ~5%; it keeps SearXNG up for Hermes/Pi search)${c_0}"
+
+  mkdir -p "$STATE"
+  echo "${c_b}strata: starting $name${c_0} - $(field "$m" 1)"
+  echo "        $(field "$m" 3)"
+  pushd "$(cfg_root "$cfg")" >/dev/null || return 1
+  setsid .venv/bin/python -m serve.server --engine strata --config "$cfg" \
+        --host 127.0.0.1 --port "$PORT" >> "$STATE/$name.server.log" 2>&1 < /dev/null &
+  echo $! > "$PIDF"
+  popd >/dev/null || true
+  echo "$name" > "$CURF"
+  for _ in $(seq 60); do [[ -n "$(engine_pid)" ]] && break; sleep 1; done
+  # the RAM/XTX guard is off (user, 2026-10-18: it kept stopping Strata); STRATA_GUARD=1 strata start NAME turns it on
+  if [[ "${STRATA_GUARD:-0}" == 1 ]]; then setsid "$0" _guard > /dev/null 2>&1 < /dev/null & echo $! > "$GUARDF"; fi
+
+  # verbose load: stream what the server and engine are doing
+  local t0=$SECONDS tails=()
+  sleep 7200 & local spid=$!          # the tails below exit when this sentinel is killed (tail --pid)
+  tail -n 0 -F --pid=$spid "$STATE/$name.server.log" 2>/dev/null | grep --line-buffered -v -E '^\s*$' \
+    | sed -u "s/^/  ${c_d}server${c_0} /" & tails+=($!)
+  tail -n 0 -F --pid=$spid "$STATE/$name.log" 2>/dev/null | grep --line-buffered -E \
+    'engine started|layer split: CUDA. runs|expert cache [0-9]+ slots|room for experts|RAM budget|pinned cache complement ready|resident RAM mode|lendable|WARNING|free with everything loaded|tuning enabled|fused|error|failed' \
+    | cut -c1-170 | sed -u "s/^/  ${c_d}engine${c_0} /" & tails+=($!)
+  local last=0
+  while :; do
+    if health | grep -q '"loaded": true'; then break; fi
+    if [[ -z "$(server_pids)" ]]; then
+      kill $spid "${tails[@]}" 2>/dev/null; echo; tail -n 15 "$STATE/$name.server.log"; tail -n 3 "$STATE/guard.log" 2>/dev/null
+      die "server exited during startup"
+    fi
+    (( SECONDS - t0 > 900 )) && { kill $spid "${tails[@]}" 2>/dev/null; die "not loaded after 15 min - see: strata logs"; }
+    if (( SECONDS - last >= 10 )); then last=$SECONDS
+      printf "  ${c_d}%4ds${c_0}   RAM free %2d GiB | XTX %5d MiB | R9700 %5d MiB\n" \
+        $((SECONDS - t0)) $(( $(mem_avail_mib) / 1024 )) "$(vram_mib "$XTX")" "$(vram_mib "$R97")"
+    fi
+    sleep 1
+  done
+  sleep 1; kill $spid 2>/dev/null; wait "${tails[@]}" 2>/dev/null
+  echo "${c_g}strata: ready${c_0} - http://127.0.0.1:$PORT/v1 (model 'local') in $((SECONDS - t0))s"
+  echo "        XTX $(vram_mib "$XTX") MiB (guard 24,300) | R9700 $(vram_mib "$R97") MiB | RAM free $(( $(mem_avail_mib) / 1024 )) GiB | guard on"
+  # like llamaserver: point client configs (Hermes, OpenClaw, Cline, ...) at the context actually served
+  local ctx; ctx=$(health | python3 -c 'import sys,json;print(json.load(sys.stdin).get("max_context",0))' 2>/dev/null)
+  if [[ "${STRATA_SYNC:-1}" == 1 && "${ctx:-0}" -gt 0 ]]; then
+    local L="$HOME/Desktop/local_llm/llama_server"
+    [[ -f "$L/src/server/sync_clients.py" ]] && python3 "$L/src/server/sync_clients.py" --alias local --context "$ctx" >/dev/null 2>&1
+    if [[ -x "$L/bin/hermes-sync-ctx" ]]; then
+      local hs; hs=$(LLAMA_PORT="$PORT" "$L/bin/hermes-sync-ctx" 2>&1); sed 's/^/        /' <<<"$hs"
+      # the Discord gateway reads context_length at start: restart it only when the window actually changed
+      if grep -q '^updated ' <<<"$hs" && systemctl --user is-active --quiet hermes-gateway.service; then
+        systemctl --user restart hermes-gateway.service && echo "        restarted hermes-gateway (Discord) for the new context"
+      fi
+    fi
+  fi
+  echo "        in Pi: /models to reconnect"
+  # like llama-server's console: stay attached and show live speed (Ctrl+C detaches, the server keeps running)
+  if [[ -t 1 && "${STRATA_WATCH:-1}" == 1 ]]; then echo; cmd_watch; fi
+}
+
+cmd_watch() {
+  [[ -n "$(server_pids)" ]] || die "no Strata server running - strata start <model>"
+  local cur; cur=$(cat "$CURF" 2>/dev/null)
+  echo "${c_b}strata: live ($cur on :$PORT) - every 3 s: what it is doing and its speed over those 3 s. Ctrl+C detaches (server keeps running).${c_0}"
+  printf "${c_d}%-8s  %-10s  %-34s  %-28s  %s${c_0}\n" time state "prompt (read / total @ pp)" "generated @ tg" "XTX / RAM free"
+  # each finished request's own summary line from the engine
+  tail -n 0 -F --pid=$$ "$STATE/$cur.log" 2>/dev/null | grep --line-buffered -E 'strata serve: prompt [0-9]+ tokens =' \
+    | sed -u -E "s/^strata serve: (.*)/  ${c_g}done:${c_0} \1/" &
+  local tp=$!
+  trap 'kill $tp 2>/dev/null; echo; echo "strata: detached - the server keeps running (strata watch | strata status | strata stop)"; exit 0' INT TERM
+  # state is reading | generating | idle; speeds are the change over the last 3 s
+  local pst="" pr=0 pg=0 idle_at=0
+  while [[ -n "$(server_pids)" ]]; do
+    local line; line=$(curl -s -m 2 "http://127.0.0.1:$PORT/metrics" | python3 -c '
+import sys, json
+try: d = json.load(sys.stdin)["live"]
+except Exception: print("down|0|0|0|0|0|0"); sys.exit()
+g = lambda k: d.get(k) or 0
+print("|".join(str(x) for x in (d.get("state") or "idle", int(g("prompt_read")), int(g("prompt_total")),
+      int(g("generated")), int(g("queued")), float(g("elapsed_s")), float(g("tok_s")))))' 2>/dev/null)
+    local st rd tot gen q el ts
+    IFS='|' read -r st rd tot gen q el ts <<<"${line:-down|0|0|0|0|0|0}"
+    local now xtx ram; now=$(date +%T); xtx=$(vram_mib "$XTX"); ram=$(( $(mem_avail_mib) / 1024 ))
+    local qtxt=""; (( q > 0 )) && qtxt=" (+$q queued)"
+    case "$st" in
+      reading)
+        local pp; if [[ "$pst" == reading && "$rd" -ge "$pr" ]]; then pp=$(( (rd - pr) / 3 ));
+                  else pp=$(awk -v r="$rd" -v e="$el" 'BEGIN{print (e>0)?int(r/e):0}'); fi
+        printf "%-8s  ${c_y}%-10s${c_0}  %-34s  %-28s  %s\n" "$now" reading \
+          "$( (( tot > 0 )) && printf "%'d / %'d @ %'d tok/s" "$rd" "$tot" "$pp" || echo "starting...")" "-" "${xtx} MiB / ${ram} GiB$qtxt"
+        pr=$rd ;;
+      generating)
+        local tg; if [[ "$pst" == generating && "$gen" -ge "$pg" ]]; then tg=$(awk -v a="$gen" -v b="$pg" 'BEGIN{printf "%.1f",(a-b)/3}');
+                  else tg=$(awk -v t="$ts" 'BEGIN{printf "%.1f",t}'); fi
+        printf "%-8s  ${c_g}%-10s${c_0}  %-34s  %-28s  %s\n" "$now" generating "-" \
+          "$(printf "%'d @ %s tok/s" "$gen" "$tg")" "${xtx} MiB / ${ram} GiB$qtxt"
+        pg=$gen ;;
+      *)  # idle / down: one line when it goes idle, then once a minute
+        if [[ "$pst" != "$st" ]] || (( SECONDS - idle_at >= 60 )); then idle_at=$SECONDS
+          printf "%-8s  ${c_d}%-10s${c_0}  %-34s  %-28s  %s\n" "$now" "$st" "-" "-" "${xtx} MiB / ${ram} GiB"
+        fi ;;
+    esac
+    pst=$st
+    sleep 3
+  done
+  kill $tp 2>/dev/null
+  echo "${c_r}strata: the server stopped${c_0}"; tail -n 1 "$STATE/guard.log" 2>/dev/null
+}
+
+cmd_status() {
+  local cur; cur=$(cat "$CURF" 2>/dev/null)
+  if [[ -n "$(server_pids)" ]]; then
+    echo "${c_b}model:${c_0}  ${cur:-?}  ($( [[ -n "$cur" ]] && field "$(find_model "$cur")" 1))"
+    local h; h=$(health)
+    if grep -q '"loaded": true' <<<"$h"; then echo "${c_b}state:${c_0}  ${c_g}ready${c_0} on http://127.0.0.1:$PORT/v1"; else echo "${c_b}state:${c_0}  ${c_y}loading${c_0}"; fi
+    live=$(curl -s -m 2 "http://127.0.0.1:$PORT/metrics" | python3 -c 'import sys,json
+try:
+  d=json.load(sys.stdin)["live"]; print(d.get("state"), (f"{d.get(\"tok_s\")} tok/s" if d.get("tok_s") else ""))
+except Exception: pass' 2>/dev/null)
+    [[ -n "$live" ]] && echo "${c_b}now:${c_0}    $live"
+  else
+    echo "${c_b}state:${c_0}  not running"
+  fi
+  echo "${c_b}XTX:${c_0}    $(vram_mib "$XTX") / 24,560 MiB VRAM (guard at 24,300), GTT $(( $(cat $XTX/mem_info_gtt_used)/1048576 )) MiB"
+  echo "${c_b}R9700:${c_0}  $(vram_mib "$R97") / 32,624 MiB VRAM"
+  echo "${c_b}RAM:${c_0}    $(( $(mem_avail_mib) / 1024 )) GiB free"
+  if [[ -f "$GUARDF" ]] && kill -0 "$(cat "$GUARDF")" 2>/dev/null; then echo "${c_b}guard:${c_0}  on"; else echo "${c_b}guard:${c_0}  off"; fi
+  docker_up && echo "${c_b}docker:${c_0} running (costs speed)" || echo "${c_b}docker:${c_0} stopped"
+  [[ -s "$STATE/guard.log" ]] && echo "${c_y}last guard event: $(tail -n 1 "$STATE/guard.log")${c_0}"
+  return 0
+}
+
+cmd_logs() {
+  local cur; cur=$(cat "$CURF" 2>/dev/null) || die "nothing started yet"
+  echo "${c_d}engine log: $STATE/$cur.log (Ctrl+C to stop following)${c_0}"
+  tail -n 30 -F "$STATE/$cur.log"
+}
+
+cmd_menu() {
+  cmd_list; echo
+  [[ -n "$(server_pids)" ]] && echo "${c_d}running now: $(cat "$CURF" 2>/dev/null) - picking another switches over${c_0}"
+  read -r -p "Model (1-${#MODELS[@]}, s=stop, q=quit): " ch
+  case "$ch" in
+    s|S) cmd_stop ;;
+    q|Q|"") exit 0 ;;
+    *) [[ "$ch" =~ ^[0-9]+$ ]] && (( ch >= 1 && ch <= ${#MODELS[@]} )) || die "invalid choice '$ch'"
+       cmd_start "$(field "${MODELS[$((ch-1))]}" 0)" ;;
+  esac
+}
+
+case "${1:-}" in
+  "")       cmd_menu ;;
+  start)    cmd_start "${2:-}" ;;
+  stop)     cmd_stop ;;
+  restart)  n=${2:-$(cat "$CURF" 2>/dev/null)}; cmd_stop; cmd_start "$n" ;;
+  status)   cmd_status ;;
+  logs)     cmd_logs ;;
+  watch)    cmd_watch ;;
+  list)     cmd_list ;;
+  _guard)   cmd_guard ;;
+  -h|--help|help) sed -n 2,14p "$0" | sed 's/^# \{0,1\}//' ;;
+  *)        die "unknown command '$1' - try: strata help" ;;
+esac

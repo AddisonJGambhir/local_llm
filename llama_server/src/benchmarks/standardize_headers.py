@@ -7,7 +7,7 @@ labels drifted from reality before (a preset described as "layer/balanced" was
 really L 38,27; one described as text-only carried an mmproj). Regenerate after
 changing a profile:  python3 src/benchmarks/standardize_headers.py
 """
-import re, subprocess, glob, os, sys
+import re, subprocess, glob, os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PROF = os.path.join(ROOT, "config", "profiles")
@@ -73,7 +73,7 @@ for p in sorted(glob.glob(os.path.join(PROF, "preset-*.sh"))):
         f"# SPEC     {spec_s}",
         f"# VISION   {vis}",
         f"# VRAM     XTX ceiling {CEIL} MiB - see MEASURED below for this profile's peak",
-        f"# MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)",
+        "# MEASURED see records/MASTER_RESULTS.csv (regenerate labels: src/benchmarks/preset_sweep.sh)",
         END, ""])
 
     body = re.sub(re.escape(BEGIN) + r".*?" + re.escape(END) + r"\n", "", src, flags=re.S)

@@ -1,0 +1,39 @@
+worktree: llama.cpp-beellama-044
+base: 3746fb185faa06104e0413236030a5e385bc510c
+subject: link Claude instructions to AGENTS
+branch: codex/qwen4exp-kvarn
+origin: https://github.com/Anbeeld/beellama.cpp.git
+
+--- git status ---
+M  conversion/__init__.py
+M  conversion/base.py
+A  conversion/qwen4exp.py
+ M ggml/src/ggml-backend.cpp
+M  gguf-py/gguf/constants.py
+M  gguf-py/gguf/gguf_writer.py
+M  gguf-py/gguf/lazy.py
+M  gguf-py/gguf/tensor_mapping.py
+M  src/CMakeLists.txt
+M  src/llama-arch.cpp
+M  src/llama-arch.h
+M  src/llama-context.cpp
+ M src/llama-graph.cpp
+M  src/llama-hparams.cpp
+M  src/llama-hparams.h
+ M src/llama-kv-cache-kvarn.cpp
+ M src/llama-kv-cache-kvarn.h
+M  src/llama-kv-cache.cpp
+MM src/llama-kv-cache.h
+AM src/llama-memory-hybrid-idx.cpp
+AM src/llama-memory-hybrid-idx.h
+M  src/llama-memory-recurrent.cpp
+M  src/llama-memory-recurrent.h
+M  src/llama-model-loader.cpp
+M  src/llama-model-saver.cpp
+M  src/llama-model-saver.h
+MM src/llama-model.cpp
+M  src/llama-model.h
+M  src/llama-quant.cpp
+M  src/models/models.h
+AM src/models/qwen4exp.cpp
+M  tests/test-llama-archs.cpp

@@ -1,0 +1,17 @@
+worktree: llama.cpp-tp-trial
+base: 7c80213c3482bd4fbc17596e6d877f7a9f4d47f1
+subject: vulkan: fix -sm tensor decode crawl, comm init robustness, add opt-in tree all-reduce
+branch: HEAD
+origin: git@github.com:ggerganov/llama.cpp.git
+
+--- git status ---
+ M common/arg.cpp
+ M common/common.cpp
+ M common/common.h
+ M common/speculative.cpp
+ M ggml/src/ggml-vulkan/ggml-vulkan.cpp
+ M tests/CMakeLists.txt
+ M tests/test-arg-parser.cpp
+ M tools/server/server-context.cpp
+?? common/speculative-adaptive.h
+?? tests/test-speculative-adaptive.cpp

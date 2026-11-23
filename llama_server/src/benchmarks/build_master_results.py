@@ -8,7 +8,7 @@ Two measurement families are folded into one schema:
 `method` distinguishes them. Never compare a llama-bench tg against a server tg:
 llama-bench does not run the MTP draft path at all.
 """
-import csv, statistics as st, os, sys
+import csv, statistics as st, os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUT  = os.path.join(ROOT, "records", "MASTER_RESULTS.csv")

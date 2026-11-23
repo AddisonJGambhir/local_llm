@@ -1,0 +1,16 @@
+# radiance profile 'q4s' - R9700 only (ROCR_VISIBLE_DEVICES=1), served on :1234 as model 'local'
+server:
+  host: 127.0.0.1
+  port: 1234
+memory:
+  gpu-headroom-mib: 160
+models:
+  local:
+    model: /home/addison-gambhir/Desktop/local_llm/radiance/models/qwen3.8-27b-iq4r-s-v4.rad
+    tp: 1
+    max-num-seqs: 2
+    max-model-len: 262144
+    kv-cache-dtype: i8
+    vision-tower-placement: ram   # image encoder weights in host RAM, VRAM stays with the KV cache (2026-11-22)
+    max-num-batched-tokens: 4096
+    checkpoint-interval: 4096

@@ -1,0 +1,209 @@
+#!/bin/bash
+# hipfire - start/stop/inspect hipfire serve on 127.0.0.1:1234 (model id "local"), like strata / llamaserver.
+#
+#   hipfire                    menu: pick a config, then it starts and shows the live view
+#   hipfire start [mode]       start a config directly (all Q8 KV, XTX only):
+#                              dflash = fastest on short prompts (BetterBench 137.9 tok/s combined), 140,709 ctx
+#                              mtp    = fastest at 8K+ context and prose (93-110 tok/s), 156,129 ctx
+#                              mtpmax = MTP with the most context, prefill ~10% slower, 158,057 ctx
+#                              maxctx = biggest Q8 context, no speculation, no vision (~46-50 tok/s), 194,680 ctx
+#                              r9700       = R9700 instead of the XTX: DFlash, fp8 KV (auto) - 119 tok/s, pp 4.6-4.9K, 262K ctx
+#                              r9700-fwht3 = R9700, DFlash, fwht3 K - 124 tok/s, pp 3.3-4.3K, 262K ctx
+#   hipfire watch              live per-request prefill/decode view (Ctrl+C detaches, server keeps running)
+#   hipfire logs               raw backend log (tail -F)
+#   hipfire status             what is running, context, VRAM
+#   hipfire stop | restart [mode]
+#   hipfire <anything else>    passed to the real hipfire CLI (~/.hipfire/bin/hipfire), e.g. hipfire bench ...
+#
+# Layout: harness -> :1234 proxy (accepts model "local", serves /props for hermes-sync-ctx) -> hipfire serve :11436.
+# Runs on the 7900 XTX (HIP_VISIBLE_DEVICES=0), or the R9700 for the r9700* modes (HIP_VISIBLE_DEVICES=1,
+# HIPFIRE_HOME=~/.hipfire-r9700: same binaries, its own gfx1201 JIT/calibration cache). Strata / llama-server also use :1234.
+set -uo pipefail
+
+# HIPFIRE_VERSION=stable -> the old 0.4.7 install; default beta (2026-11-22: +19% ctx, +2-15% pp, decode tie)
+if [[ "${HIPFIRE_VERSION:-beta}" == stable ]]; then HF_HOME="$HOME/.hipfire"; else HF_HOME="$HOME/.hipfire-beta"; fi
+REAL="$HF_HOME/bin/hipfire"
+TAG="qwen3.8:27b-mq4-xts"
+PORT="${HIPFIRE_PORT:-1234}"
+BPORT="${HIPFIRE_BACKEND_PORT:-11436}"
+STATE="${HIPFIRE_STATE:-$HOME/.hipfire/local}"
+XTX_SYS=/sys/bus/pci/devices/0000:03:00.0
+R97_SYS=/sys/bus/pci/devices/0000:14:00.0
+mkdir -p "$STATE"
+
+c_g=$'\e[32m'; c_y=$'\e[33m'; c_r=$'\e[31m'; c_b=$'\e[1m'; c_d=$'\e[2m'; c_0=$'\e[0m'
+die() { echo "${c_r}hipfire: $*${c_0}" >&2; exit 1; }
+pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
+rd() { cat "$STATE/$1" 2>/dev/null; }
+port_busy() { ss -Htln "( sport = :$1 )" | grep -q .; }
+health_ok() { curl -sf -m 2 "http://127.0.0.1:$BPORT/health" 2>/dev/null | grep -q "\"model\":\"$TAG\""; }
+AWK=(awk); command -v mawk >/dev/null && AWK=(mawk -W interactive)
+xtx_mib() { echo $(( $(cat "$XTX_SYS/mem_info_vram_used" 2>/dev/null || echo 0) / 1048576 )); }
+r97_mib() { echo $(( $(cat "$R97_SYS/mem_info_vram_used" 2>/dev/null || echo 0) / 1048576 )); }
+
+mode_args() {   # prints env assignments and serve flags for a mode
+  case "$1" in
+    dflash|dflash3|dflash4|r9700|r9700-fwht3) echo "--spec dflash" ;;
+    mtp|mtpmax) echo "--spec mtp" ;;
+    maxctx) echo "--spec off" ;;
+    *) die "unknown mode '$1' (dflash | dflash3 | dflash4 | mtp | mtpmax | maxctx | r9700 | r9700-fwht3)" ;;
+  esac
+}
+
+cmd_start() {
+  local mode="${1:-dflash3}"; mode_args "$mode" >/dev/null || exit 1
+  [[ -x "$REAL" ]] || die "hipfire binary missing at $REAL"
+  if pid_alive "$(rd proxy.pid)" && pid_alive "$(rd backend.pid)"; then
+    echo "${c_y}hipfire: already running ($(rd mode)) - attaching. 'hipfire restart $mode' to switch.${c_0}"; cmd_watch; return
+  fi
+  port_busy "$PORT"  && die "port $PORT is in use (Strata? llama-server?) - run 'strata stop' or 'llamakill' first"
+  port_busy "$BPORT" && die "backend port $BPORT is in use - another hipfire serve? check 'hipfire ps'"
+  local gpu=XTX dev=0 home="$HF_HOME" used
+  if [[ "$mode" == r9700* ]]; then gpu=R9700; dev=1; home="$HOME/.hipfire-r9700"; used=$(r97_mib); else used=$(xtx_mib); fi
+  [[ -d "$home" ]] || die "missing $home (R9700 home: bin/src/models symlinked to ~/.hipfire-beta)"
+  (( used > 2048 )) && echo "${c_y}hipfire: warning - $gpu already has ${used} MiB in use (another engine?)${c_0}"
+
+  local flags; flags=$(mode_args "$mode")
+  local envs=(HIP_VISIBLE_DEVICES="$dev" HIPFIRE_HOME="$home")
+  [[ "$mode" == mtp || "$mode" == mtpmax ]] && envs+=(HIPFIRE_MTP_K=3)
+  [[ "$mode" == mtp ]] && envs+=(HIPFIRE_PREFILL_MAX_BATCH=384)      # same prefill as default 512, +1.9K ctx
+  [[ "$mode" == mtpmax ]] && envs+=(HIPFIRE_PREFILL_MAX_BATCH=256)
+  [[ "$mode" == maxctx ]] && envs+=(HIPFIRE_VISION_MODE=off)
+  { echo; echo "===== $(date '+%F %T') start mode=$mode tag=$TAG port=$BPORT ====="; } >> "$STATE/backend.log"
+  local kv=q8; [[ "$mode" == dflash4 ]] && kv=fwht4; [[ "$mode" == dflash3 || "$mode" == r9700-fwht3 ]] && kv=fwht3   # fwht3 K: 236K ctx, needles 2/2 at 225K (2026-11-22)
+       # fwht4 KV: +5-7% decode, 183K ctx, prefill -6-9% (2026-11-22)
+  local kvf=(--kv-mode "$kv"); [[ "$mode" == r9700 ]] && kvf=()   # r9700: hipfire's automatic fp8 KV (best pp on gfx1201, 2026-11-22)
+  setsid env "${envs[@]}" "$REAL" serve "$TAG" "127.0.0.1:$BPORT" $flags "${kvf[@]}" --idle-timeout 0 \
+      >> "$STATE/backend.log" 2>&1 < /dev/null &
+  echo $! > "$STATE/backend.pid"
+  local pv=1; [[ "$mode" == maxctx ]] && pv=0   # tells Pi (via /props modalities) whether images work
+  setsid env PROXY_VISION=$pv python3 -I "$STATE/proxy.py" "$PORT" "$BPORT" "$TAG" >> "$STATE/proxy.log" 2>&1 < /dev/null &
+  echo $! > "$STATE/proxy.pid"
+  echo "$mode" > "$STATE/mode"
+  echo "${c_b}hipfire: loading $TAG ($mode) on the $gpu...${c_0}"
+
+  local t0=$SECONDS start_line; start_line=$(wc -l < "$STATE/backend.log")
+  sleep 7200 & local spid=$!          # loader tail exits when this sentinel is killed
+  tail --pid=$spid -n +"$((start_line + 1))" -F "$STATE/backend.log" 2>/dev/null \
+    | grep --line-buffered -E 'load summary|max_seq fit|listening|rror|panic|OOM|refus' \
+    | sed -u -e "s/^/  ${c_d}/" -e "s/\$/${c_0}/" &
+  local tp=$!
+  until health_ok; do
+    pid_alive "$(rd backend.pid)" || { kill $spid 2>/dev/null; die "backend exited during load - see 'hipfire logs'"; }
+    (( SECONDS - t0 > 600 )) && { kill $spid 2>/dev/null; die "not ready after 10 min - see 'hipfire logs'"; }
+    sleep 1
+  done
+  sleep 0.5; kill $spid 2>/dev/null; wait $tp 2>/dev/null
+  local ctx; ctx=$(curl -s -m 3 "http://127.0.0.1:$PORT/props" | python3 -c 'import sys,json;print(json.load(sys.stdin)["default_generation_settings"]["n_ctx"])' 2>/dev/null || echo 0)
+  echo "${c_g}hipfire: ready${c_0} - http://127.0.0.1:$PORT/v1 (model 'local', $mode, ${ctx} ctx) in $((SECONDS - t0))s"
+
+  # keep Pi / Hermes pointed at the real context, same as strata
+  local L="$HOME/Desktop/local_llm/llama_server"
+  if (( ctx > 0 )) && [[ -z "${HIPFIRE_NO_SYNC:-}" ]]; then
+    [[ -f "$L/src/server/sync_clients.py" ]] && python3 "$L/src/server/sync_clients.py" --alias local --context "$ctx" >/dev/null 2>&1
+    if [[ -x "$L/bin/hermes-sync-ctx" ]]; then
+      local hs; hs=$(LLAMA_PORT="$PORT" "$L/bin/hermes-sync-ctx" 2>&1); sed 's/^/        /' <<<"$hs"
+      if grep -q '^updated ' <<<"$hs" && systemctl --user is-active --quiet hermes-gateway.service; then
+        systemctl --user restart hermes-gateway.service && echo "        restarted hermes-gateway (Discord) for the new context"
+      fi
+    fi
+  fi
+  cmd_watch
+}
+
+cmd_menu() {
+  local last; last=$(rd mode); last=${last:-dflash3}
+  if pid_alive "$(rd proxy.pid)" && pid_alive "$(rd backend.pid)"; then
+    echo "${c_y}hipfire: running ($last) - attaching. 'hipfire restart <mode>' to switch.${c_0}"; cmd_watch; return
+  fi
+  local modes=(dflash dflash3 dflash4 mtp mtpmax maxctx r9700 r9700-fwht3)
+  #            mode     GPU     context    KV cache (K / V)      speed (BetterBench, temp 1.0)
+  local desc=("DFlash   XTX    ctx 168K   KV q8 / q8          ~121 tok/s, pp 2.15-2.60K"
+              "DFlash3  XTX    ctx 236K   KV fwht3 / q8       ~125 tok/s, pp 2.14-2.46K - DEFAULT"
+              "DFlash4  XTX    ctx 220K   KV fwht4 / q8       ~125 tok/s, pp 2.15-2.48K"
+              "MTP      XTX    ctx 156K   KV q8 / q8          93-110 tok/s, best at 8K+ context / prose"
+              "MTP max  XTX    ctx 158K   KV q8 / q8          MTP, most context, prefill ~10% slower"
+              "Max ctx  XTX    ctx 195K   KV q8 / q8          ~46-50 tok/s, no speculation, NO vision"
+              "R9700    R9700  ctx 262K   KV fp8 / fp8        ~119 tok/s, pp 4.6-4.9K - fastest prefill"
+              "R9700 3  R9700  ctx 262K   KV fwht3 / q8       ~124 tok/s, pp 3.3-4.3K")
+  echo "${c_b}hipfire configs${c_0} (Qwen3.8-27B MQ4-XTS, served as 'local' on :$PORT; vision on all but Max ctx; fwht3/4 = 3/4-bit rotated keys)"
+  local i def=1
+  for i in "${!modes[@]}"; do
+    [[ "${modes[$i]}" == "$last" ]] && def=$((i + 1))
+    printf "  %d) %s\n" $((i + 1)) "${desc[$i]}"
+  done
+  local pick; read -r -p "pick [${def}]: " pick; pick=${pick:-$def}
+  [[ "$pick" =~ ^[1-8]$ ]] || die "pick 1-8"
+  cmd_start "${modes[$((pick - 1))]}"
+}
+
+cmd_watch() {
+  pid_alive "$(rd backend.pid)" || die "not running - 'hipfire start'"
+  echo "${c_b}hipfire: live ($(rd mode) on :$PORT) - one line per request. Ctrl+C detaches (server keeps running).${c_0}"
+  tail -q -n 0 -F "$STATE/backend.log" "$STATE/proxy.log" 2>/dev/null | "${AWK[@]}" -v G="$c_g" -v Y="$c_y" -v R="$c_r" -v D="$c_d" -v Z="$c_0" '
+    function reset() { dtok=0; dtps=""; tau="" }
+    function num(key,   v) { v=0; if (match($0, key "=[0-9.]+")) v=substr($0, RSTART+length(key)+1, RLENGTH-length(key)-1); return v+0 }
+    BEGIN { reset() }
+    /drafter=[a-z]+ tau=/ {
+      match($0, /tau=[0-9.]+/); tau=substr($0, RSTART+4, RLENGTH-4)
+      match($0, /tok\/s=[0-9.]+/); dtps=substr($0, RSTART+6, RLENGTH-6)
+      match($0, /\([0-9]+ tok/); dtok=substr($0, RSTART+1, RLENGTH-5); next }
+    / (POST|GET) \/v1\// && / prompt=[0-9]+ / {
+      t=$1; st=$4
+      if ($3 !~ /completions|responses/) { reset(); next }       # skip /v1/models etc
+      prompt=num("prompt"); cached=num("cached"); gen=num("gen"); ft=num("first-token"); tot=num("total")
+      new = prompt - cached; if (new < 0) new = 0
+      ctxs = (cached > 0) ? sprintf("  %s+%d cached%s", D, cached, Z) : ""
+      if (prompt == 0)        pp = "    ? tok"
+      else if (ft > 0)        pp = sprintf("%6d tok @ %5.0f t/s", new, new/ft)
+      else                    pp = sprintf("%6d tok", new)
+      if (dtps != "")         tg = sprintf("%5d tok @ %6.1f t/s  tau %s", dtok, dtps, tau)
+      else if (gen > 0 && tot > ft) tg = sprintf("%5d tok @ %6.1f t/s", gen, (gen-1)/(tot-ft))
+      else                    tg = "      -"
+      col = (st == 200) ? G : R
+      printf "%s  %s%s%s  pp %s | tg %s  %s(ttft %.2fs, %.1fs total)%s%s\n", t, col, st, Z, pp, tg, D, ft, tot, Z, ctxs
+      fflush(); reset(); next }
+    /client disconnected|502 backend down/ { print Y $0 Z; fflush(); next }
+    /[Ee]rror|panic|OOM|refused/ && !/retryable=true/ { print R "  " substr($0,1,220) Z; fflush(); next }
+  '
+}
+
+cmd_status() {
+  local bp pp; bp=$(rd backend.pid); pp=$(rd proxy.pid)
+  if ! pid_alive "$bp"; then echo "${c_b}state:${c_0}  stopped"; echo "${c_b}XTX:${c_0}    $(xtx_mib) MiB used"; return; fi
+  if health_ok; then echo "${c_b}state:${c_0}  ${c_g}ready${c_0} on http://127.0.0.1:$PORT/v1 (model 'local')"; else echo "${c_b}state:${c_0}  ${c_y}loading${c_0}"; fi
+  echo "${c_b}mode:${c_0}   $(rd mode)  (backend pid $bp, proxy pid $pp $(pid_alive "$pp" && echo ok || echo ${c_r}DOWN${c_0}))"
+  curl -s -m 2 "http://127.0.0.1:$BPORT/stats" | python3 -c '
+import sys,json
+s=json.load(sys.stdin); c=s.get("loaded_config") or {}
+B, Z = "\033[1m", "\033[0m"
+print(B + "model:" + Z + "  %s  kv=%s/%s  ctx=%s" % (c.get("model"), c.get("kv_mode"), c.get("kv_backend"), c.get("max_seq")))
+print(B + "served:" + Z + " %s requests, up %ss, recent %s tok/s" % (s.get("requests_served"), s.get("uptime_sec"), s.get("recent_tok_s")))' 2>/dev/null
+  echo "${c_b}XTX:${c_0}    $(xtx_mib) MiB used   ${c_b}R9700:${c_0} $(r97_mib) MiB used"
+}
+
+cmd_stop() {
+  local any=0 p
+  for f in proxy.pid backend.pid; do
+    p=$(rd $f)
+    if pid_alive "$p"; then kill -TERM -- "-$p" 2>/dev/null || kill -TERM "$p"; any=1; fi
+  done
+  (( any )) || { echo "hipfire: not running"; rm -f "$STATE"/*.pid; return 0; }
+  for _ in $(seq 30); do port_busy "$PORT" || port_busy "$BPORT" || break; sleep 1; done
+  for f in proxy.pid backend.pid; do p=$(rd $f); pid_alive "$p" && kill -KILL -- "-$p" 2>/dev/null; done
+  rm -f "$STATE"/*.pid
+  echo "hipfire: stopped (XTX $(xtx_mib) MiB used)"
+}
+
+case "${1:-}" in
+  "")        if [[ -t 0 ]]; then cmd_menu; else cmd_start dflash; fi ;;
+  start)     shift; cmd_start "${1:-dflash3}" ;;
+  menu)      cmd_menu ;;
+  restart)   shift; cmd_stop; cmd_start "${1:-$(rd mode || echo dflash)}" ;;
+  stop)      cmd_stop ;;
+  watch)     cmd_watch ;;
+  logs)      tail -n 50 -F "$STATE/backend.log" ;;
+  status)    cmd_status ;;
+  -h|--help|help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *)         exec "$REAL" "$@" ;;
+esac

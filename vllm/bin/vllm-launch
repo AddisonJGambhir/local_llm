@@ -1,0 +1,353 @@
+#!/usr/bin/env bash
+# vllm-launch — interactive preset picker for the mixed-RDNA TP=2 vLLM server.
+# Writes a profile, restarts the server, then follows the live log.
+#
+# Every preset below is MEASURED on this box (RX 7900 XTX gfx1100 + Radeon AI
+# PRO R9700 gfx1201, Qwen3.8-27B Quark INT4 W4A16) and passes the correctness
+# battery. Numbers are single-stream decode tok/s by workload.
+# See docs/OPTIMIZATION.md for the full experiment log.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VLLM_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+STATE_HOME="${VLLM_STATE_HOME:-${XDG_STATE_HOME:-$HOME/.local/state}/vllm-mixedrdna}"
+PROFILE_OUT="$STATE_HOME/active-profile.sh"
+
+ACTION="restart"
+PRESET=""
+FOLLOW=1
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run)   ACTION="command"; shift ;;
+        --no-follow) FOLLOW=0; shift ;;
+        --preset)    PRESET="$2"; shift 2 ;;
+        -h|--help)
+            echo "Usage: vllmserver [--preset N] [--dry-run] [--no-follow]"
+            echo "       vllmserver          # interactive picker, then live log"
+            exit 0 ;;
+        *) echo "Unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
+MODEL='amd/Qwen3.8-27B-Quark-AWQ-INT4-W4A16'
+DRAFTER='incoai/Qwen3.8-27B-DFlash2'
+# :p8 = P8 KV-group-sizing patch (serve/fork_patches_p8.py). Without
+# VLLM_P8_GROUP_SIZE set its behaviour is identical to :p7; with it, the
+# drafter's 5-layer SWA bucket no longer inflates the KV pool.
+IMAGE='local/vllm-mixedrdna:p9'   # promoted 2026-09-07: A/B/A/B tg parity (44.8/45.3 vs 44.8/44.9), pp +8.6%; decode untouched by construction (dispatch M>=128)
+
+if [[ -z "$PRESET" ]]; then
+    cat <<'MENU'
+
+  mixed-RDNA vLLM — 7900 XTX (gfx1100) + R9700 (gfx1201), TP=2
+  ============================================================
+  every preset: KV cache bf16 (vLLM "auto", unquantized) · vision on (tower on the GPUs) · ctx column = context
+  decode tok/s, single stream        prose  code  json  edit | mean |   tg    pp | ctx
+
+  --- temp 1.0, battery-green (prose + tg = worst of 3; the rest = median) ---
+  13) k=4 PROB + skinny GEMM [BEST]  65.5 100.5 112.3  92.2 | 92.6 | 67.8  1249 | 262k
+   9) DFlash2 k=4 PROB · 262k        60.1  93.8 105.4  87.6 | 86.7 | 59.9  1243 | 262k
+  12) k=3 PROB · 262k (P10)          68.5  98.0  92.0  84.1 | 85.7 | 66.9  1234 | 262k
+  14) k=4 PROB · 262k (P10, cap 5)   62.7  91.2 106.5  81.4 | 85.5 | 66.7  1244 | 262k
+   8) DFlash2 k=4 · 262k (P8)        56.6  88.9 100.2  76.9 | 83.0 | 60.5+ 1242+| 262k
+  11) MTP-2 + graphs · 131k          60.0  73.2  79.1  67.2 | 70.6 | 64.3+ 1209+| 131k
+  10) MTP-3 + graphs · 131k          53.0  72.4  81.7  59.4 | 66.6 | 56.9+ 1210+| 131k
+   6) No speculation, graphs only    45.3  45.2  45.1  45.0 | 45.1 | 45.4+ 1238+| 131k
+
+  + = measured in a different sitting (10/11 on their probabilistic variants),
+      so those tg/pp are indicative only. The unmarked rows are one sitting.
+
+  ctx is the PER-REQUEST cap. The shared KV pool is what runs out first:
+  293,873 tokens measured at 262k, ~181,800 estimated at 131k, divided across
+  all 8 slots. So 8 concurrent subagents get ~36k each at 262k, ~22k at 131k,
+  and 262k is reachable only by a request that has the box to itself (vLLM
+  reports "maximum concurrency 1.12x" for it).
+
+  13 is the daily driver (measured 2026-09-08). It is preset 9 plus one env
+  var, VLLM_ROCM_USE_SKINNY_GEMM=1, and it wins every workload. Acceptance
+  and tokens-per-step are identical to 9, so the whole gain is step time.
+  Pick 12 instead if prose is what you care about: 68.5 is the best prose
+  number on this box, at the cost of json (92.0 vs 112.3).
+  CAVEAT: 9 was measured first that evening and 12/13/14 after it, and this
+  box has two-state behaviour, so a control repeat (bin/run-preset-ab, stage
+  p9-control-B) is still outstanding. Treat the deltas as provisional.
+
+  --- unvalidated experiments (battery + greedy BEFORE trusting these) ---
+  22) 13 + 14 stacked (different GEMMs, should add)
+  20) k=3 on stock p9 — splits 12's win between depth and the skinny kernel
+  15/16/17) k=5 / k=6 / k=8 + matching capture size (the #24 re-sweep)
+  21) dynamic k by batch size ([[1,1,4],[2,2,3],[3,8,2]])
+  23) YaRN 300k — needs a needle test at ~290k AND a short-context check
+  18/19) torch-profiler builds, EAGER: k=4 and no-spec (the #19 per-kernel diff)
+
+  --- temp 0.0 (INFLATED — greedy decoding raises draft acceptance;
+      not comparable to the block above. Kept for history only) ---
+   1) DFlash2 k=10 + graphs             56.5  113.5 156.1 109.9 | 109.0
+   2) DFlash2 k=7  + graphs             65.3  106.4 138.2 102.2 | 103.0
+   3) DFlash2 k=14 + graphs (max json)  52.3  103.1 168.9 104.4 | 107.2
+   4) MTP-4 + graphs                    56.3   78.6  94.6  79.3 |  77.2
+   5) DFlash2 k=7, EAGER (no graphs)    42.6   80.0 101.3  75.9 |  75.0
+   7) DFlash2 k=10 · 262k ctx (P8)      max context; ceiling ~200-210k | 262k
+
+  11 is the prose specialist (measured 2026-09-07): MTP's in-checkpoint
+  head gets 55-57% acceptance on prose vs DFlash2's 35-43%, and a 34.9 ms
+  step vs 42.5 ms. It also has a 1.3% run-to-run spread vs DFlash2's 7%,
+  which is why it wins on a worst-of-3 score. COST: mean 83.0 -> 70.6 (MTP
+  is worse on code/json). Pick 8 or 9 if aggregate throughput matters more.
+  Raw decode ceiling is 45.3 tok/s = 15.67 ms weight read (R9700-paced)
+  + 6.66 ms all-reduce (128 x 52 us, measured) — see
+  docs/PROSE-DECODE-RESULTS.md.
+  Prefill ~1240 tok/s on 1-3, ~1185 on 5, ~520 at 262k depth.
+MENU
+    read -r -p "  Preset [1]: " PRESET
+    PRESET="${PRESET:-1}"
+fi
+
+SPEC=""; GRAPHS=1; NAME=""; EXTRA_ENV_OVR=""
+CTX_OVR=""; UTIL_OVR=""; PIN_OVR=""; BT_OVR=""; CC_OVR=""; P8_OVR=""; IMG_OVR=""; PROF_OVR=""; HF_OVR=""
+case "$PRESET" in
+    1) NAME="DFlash2 k=10 + graphs"
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":10,\"attention_backend\":\"TRITON_ATTN\"}" ;;
+    2) NAME="DFlash2 k=7 + graphs"
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":7,\"attention_backend\":\"TRITON_ATTN\"}" ;;
+    3) NAME="DFlash2 k=14 + graphs"
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":14,\"attention_backend\":\"TRITON_ATTN\"}" ;;
+    4) NAME="MTP-4 + graphs"
+       SPEC='{"method":"mtp","num_speculative_tokens":4,"attention_backend":"TRITON_ATTN"}' ;;
+    5) NAME="DFlash2 k=7, eager"; GRAPHS=0
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":7,\"attention_backend\":\"TRITON_ATTN\"}" ;;
+    6) NAME="no speculation, graphs" ;;
+    7) NAME="DFlash2 k=10 + graphs · 262k (P8)"
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":10,\"attention_backend\":\"TRITON_ATTN\"}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,8]}'   # ~1.1 GiB saved; [1..8] covers max-num-seqs 8
+       P8_OVR=16 ;;
+    8) NAME="DFlash2 k=4 + graphs · 262k (P8)"
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":4,\"attention_backend\":\"TRITON_ATTN\"}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,8]}'
+       P8_OVR=16 ;;
+    9) NAME="DFlash2 k=4 probabilistic · 262k (P8) [DEFAULT-BEST]"
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":4,\"attention_backend\":\"TRITON_ATTN\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,8]}'
+       P8_OVR=16 ;;
+    11) NAME="MTP-2 + graphs · 131k (prose)"
+       # Measured 2026-09-07, temp 1.0, worst of 3: prose 60.0 (best on this
+       # box). MTP's in-checkpoint 1-layer head is both cheaper per step and
+       # more accurate on prose than the external DFlash2 drafter.
+       SPEC='{"method":"mtp","num_speculative_tokens":2,"attention_backend":"TRITON_ATTN"}'
+       CTX_OVR=131072 ;;
+    10) NAME="MTP-3 + graphs · 131k (balanced)"
+       SPEC='{"method":"mtp","num_speculative_tokens":3,"attention_backend":"TRITON_ATTN"}'
+       CTX_OVR=131072 ;;
+    12) NAME="DFlash2 k=3 probabilistic · 262k (P10 skinny down_proj)"
+       # P10: raises the hybrid kernel's LDS guard so the K=8704 down_proj
+       # (all 64 layers) stays on the HIP skinny GEMM at M=4 instead of
+       # falling to Triton. Measured 54.8 us vs 129.8 us per call on the
+       # R9700 (bench/templates/skinny_gemm_m_sweep.py). M=4 means k=3:
+       # at k=4 (M=5) the C++ kernel genuinely cannot take that shape.
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":3,\"attention_backend\":\"TRITON_ATTN\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,8]}'
+       P8_OVR=16; IMG_OVR='local/vllm-mixedrdna:p10'
+       EXTRA_ENV_OVR='VLLM_RDNA_SKINNY_LDS_MAX=38912' ;;
+    14) NAME="DFlash2 k=4 probabilistic · 262k (P10, capture size 5)"
+       # CUDA graphs pad the decode batch up to the next captured size, so
+       # k=4 (M=5) runs its GEMMs at M=8 -- past MAX_SKINNY_BATCH_SIZE, i.e.
+       # Triton for every quantized linear on rank 1. Capturing 5 exactly
+       # keeps M=5, which the skinny kernel accepts for every shape except
+       # the K=8704 down_proj (43520 > the ~38912 C++ limit).
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":4,\"attention_backend\":\"TRITON_ATTN\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,5,8]}'
+       P8_OVR=16; IMG_OVR='local/vllm-mixedrdna:p10'
+       EXTRA_ENV_OVR='VLLM_RDNA_SKINNY_LDS_MAX=38912' ;;
+    13) NAME="DFlash2 k=4 probabilistic · 262k + ROCm skinny GEMM"
+       # Preset 9 plus VLLM_ROCM_USE_SKINNY_GEMM=1. vllmctl hardcodes 0
+       # (historic wvSplitK segfault on the unquantized BF16 path); a later
+       # -e wins, so this preset flips it back on for the MTP head, GDN
+       # projections and lm_head only. UNVALIDATED: battery + greedy first.
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":4,\"attention_backend\":\"TRITON_ATTN\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,8]}'
+       P8_OVR=16
+       EXTRA_ENV_OVR='VLLM_ROCM_USE_SKINNY_GEMM=1' ;;
+    15) NAME="DFlash2 k=5 probabilistic · 262k (P10, capture 6)"
+       # k re-sweep (#24). M=6 is past MAX_SKINNY_BATCH_SIZE=5, so every rank-1 GEMM is Triton here whatever the guard says: this leg measures acceptance gain alone.
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":5,\"attention_backend\":\"TRITON_ATTN\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,6,8]}'
+       P8_OVR=16; IMG_OVR='local/vllm-mixedrdna:p10'
+       EXTRA_ENV_OVR='VLLM_RDNA_SKINNY_LDS_MAX=38912' ;;
+    16) NAME="DFlash2 k=6 probabilistic · 262k (P10, capture 7)"
+       # k re-sweep (#24). Same: M=7, Triton-only on rank 1.
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":6,\"attention_backend\":\"TRITON_ATTN\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,7,8]}'
+       P8_OVR=16; IMG_OVR='local/vllm-mixedrdna:p10'
+       EXTRA_ENV_OVR='VLLM_RDNA_SKINNY_LDS_MAX=38912' ;;
+    17) NAME="DFlash2 k=8 probabilistic · 262k (P10, capture 9)"
+       # k re-sweep (#24). M=9; note max capture size rises to 9, which costs graph memory on the XTX (only ~1.2 GB free at the current pin).
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":8,\"attention_backend\":\"TRITON_ATTN\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,9]}'
+       P8_OVR=16; IMG_OVR='local/vllm-mixedrdna:p10'
+       EXTRA_ENV_OVR='VLLM_RDNA_SKINNY_LDS_MAX=38912' ;;
+    18) NAME="profiler: k=4 probabilistic · 262k, EAGER"
+       # Task #19. /start_profile and /stop_profile only exist when the
+       # server is launched with --profiler-config (they are NOT dev-mode
+       # gated). Graphs make the worker die on stop_profile, so this preset
+       # is eager by construction. Traces land in the triton bind mount, so
+       # they appear on the host at ~/.cache/triton-mixedtp/prof.
+       GRAPHS=0
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":4,\"attention_backend\":\"TRITON_ATTN\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       P8_OVR=16; IMG_OVR='local/vllm-mixedrdna:p10'
+       PROF_OVR='{"profiler":"torch","torch_profiler_dir":"/root/.cache/triton/prof","torch_profiler_with_stack":false}' ;;
+    19) NAME="profiler: no speculation · 262k, EAGER (control for #19)"
+       GRAPHS=0
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       P8_OVR=16; IMG_OVR='local/vllm-mixedrdna:p10'
+       PROF_OVR='{"profiler":"torch","torch_profiler_dir":"/root/.cache/triton/prof","torch_profiler_with_stack":false}' ;;
+    20) NAME="DFlash2 k=3 probabilistic · 262k (p9, NO skinny guard) — control for 12"
+       # Isolates what preset 12's gain actually came from. Same k=3 and the
+       # same capture list as 12, but the stock p9 image and no
+       # VLLM_RDNA_SKINNY_LDS_MAX, so the K=8704 down_proj stays on Triton.
+       # 12 minus 20 = the skinny kernel's contribution; 20 minus the p9
+       # control = what dropping one draft token is worth on its own.
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":3,\"attention_backend\":\"TRITON_ATTN\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,8]}'
+       P8_OVR=16 ;;
+    21) NAME="DFlash2 dynamic k by batch size · 262k (P10)"
+       # Task #22 turns out to need no fork: vLLM 0.28 already has
+       # num_speculative_tokens_per_batch_size, a list of inclusive
+       # (start, end, k) ranges (v1/spec_decode/dynamic/utils.py). It is
+       # only refused under data parallelism (config/vllm.py:930-946); DP=1
+       # TP=2 is fine, and cudagraph_utils.py:199 knows about it.
+       # Schedule: deep draft when the GPU is idle, shallower as the batch
+       # fills, because speculation stops paying once the batch saturates.
+       # It is batch-adaptive, NOT content-adaptive -- prose-vs-json still
+       # wants the #24 sweep.
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":4,\"attention_backend\":\"TRITON_ATTN\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\",\"num_speculative_tokens_per_batch_size\":[[1,1,4],[2,2,3],[3,8,2]]}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,5,8]}'
+       P8_OVR=16; IMG_OVR='local/vllm-mixedrdna:p10'
+       EXTRA_ENV_OVR='VLLM_RDNA_SKINNY_LDS_MAX=38912' ;;
+    22) NAME="DFlash2 k=4 prob · 262k · P10 + capture 5 + ROCm skinny GEMM"
+       # Stacks the two independent wins from the 2026-09-08 A/B:
+       #   preset 13 (VLLM_ROCM_USE_SKINNY_GEMM=1): mean 92.6 vs 84.7, every
+       #     workload up, acceptance unchanged -> pure step time
+       #   preset 14 (capture size 5 + raised skinny guard): tg worst 66.7
+       #     vs 59.9, prose 62.7 vs 59.8
+       # They touch different GEMMs (unquantized BF16 vs W4A16), so they
+       # should add. UNVALIDATED until measured.
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":4,\"attention_backend\":\"TRITON_ATTN\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}"
+       CTX_OVR=262144; UTIL_OVR=0.82; PIN_OVR=10415570739; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,5,8]}'
+       P8_OVR=16; IMG_OVR='local/vllm-mixedrdna:p10'
+       EXTRA_ENV_OVR='VLLM_RDNA_SKINNY_LDS_MAX=38912 VLLM_ROCM_USE_SKINNY_GEMM=1' ;;
+    23) NAME="YaRN 300k · DFlash2 k=4 prob + ROCm skinny GEMM (UNVALIDATED)"
+       # The model's native ceiling is max_position_embeddings = 262144, and
+       # that is exactly what presets 7-22 serve, so going further needs RoPE
+       # scaling. vLLM handles YaRN on top of this model's MRoPE
+       # (rotary_embedding/__init__.py:243 has an explicit mrope_section
+       # branch), so the positional side is supported.
+       #
+       # The binding constraint is KV bytes, not positions. Measured on this
+       # box: 10,415,570,739 B of pin -> 293,873 tokens = 35,442 B/token.
+       #   300k tokens -> 10.63 GB   (+0.21 GB over the current pin: FITS,
+       #                              the XTX has ~1.2 GB free)
+       #   400k tokens -> 14.18 GB   (+3.76 GB: does NOT fit, and
+       #                              _check_enough_kv_cache_memory raises at
+       #                              startup rather than degrading)
+       # So YaRN buys ~300-320k here, never 400k.
+       #
+       # MANDATORY before trusting: needle test near 290k depth
+       # (bench/templates/needle262_raw.py with the target raised). YaRN is
+       # applied to every request, so short-context quality must be checked
+       # too - battery + greedy are not sufficient evidence for a rope change.
+       SPEC="{\"method\":\"dflash\",\"model\":\"$DRAFTER\",\"num_speculative_tokens\":4,\"attention_backend\":\"TRITON_ATTN\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}"
+       CTX_OVR=300000; UTIL_OVR=0.82; PIN_OVR=10700000000; BT_OVR=1024
+       CC_OVR='{"cudagraph_capture_sizes":[1,2,4,5,8]}'
+       P8_OVR=16; IMG_OVR='local/vllm-mixedrdna:p10'
+       EXTRA_ENV_OVR='VLLM_RDNA_SKINNY_LDS_MAX=38912 VLLM_ROCM_USE_SKINNY_GEMM=1'
+       HF_OVR='{"text_config":{"rope_parameters":{"rope_type":"yarn","factor":1.15,"original_max_position_embeddings":262144,"mrope_interleaved":true,"mrope_section":[11,11,10],"partial_rotary_factor":0.25,"rope_theta":10000000}}}' ;;
+    *) echo "Invalid preset: $PRESET" >&2; exit 2 ;;
+esac
+
+CTX="${CTX_OVR:-${VLLM_MAX_MODEL_LEN:-131072}}"
+SEQS="${VLLM_MAX_NUM_SEQS:-8}"
+UTIL="${UTIL_OVR:-${VLLM_GPU_UTIL:-0.80}}"   # XTX drives the desktop — do not raise blindly
+
+mkdir -p "$STATE_HOME"
+TMP="$PROFILE_OUT.$$"
+{
+    echo "# generated by vllm-launch on $(date -Is)"
+    # P8 group size must reach the container env (vllmctl build_cmd picks it up)
+    [[ -n "$P8_OVR" ]] && printf 'export VLLM_P8_GROUP_SIZE=%q\n' "$P8_OVR"
+    # vllmctl reads VLLM_EXTRA_ENV as an ARRAY of KEY=VALUE entries.
+    if [[ -n "$EXTRA_ENV_OVR" ]]; then
+        printf 'VLLM_EXTRA_ENV=('
+        printf '%q ' $EXTRA_ENV_OVR
+        printf ')\n'
+    fi
+    printf 'VLLM_PRESET_NAME=%q\n' "$NAME"
+    printf 'VLLM_IMAGE=%q\n' "${IMG_OVR:-$IMAGE}"
+    printf 'VLLM_MODEL=%q\n' "$MODEL"
+    echo 'SERVE_ARGS=('
+    printf '  %q\n' --gpu-memory-utilization "$UTIL"
+    printf '  %q\n' --max-model-len "$CTX"
+    printf '  %q\n' --max-num-seqs "$SEQS"
+    printf '  %q\n' --max-num-batched-tokens "${BT_OVR:-4096}"
+    [[ -n "$CC_OVR" ]] && printf '  %q\n' --compilation-config "$CC_OVR"
+    [[ -n "$PROF_OVR" ]] && printf '  %q\n' --profiler-config "$PROF_OVR"
+    [[ -n "$HF_OVR" ]] && printf '  %q\n' --hf-overrides "$HF_OVR"
+    # KV pin (radiance's technique): vLLM's profiler subtracts the profile
+    # run's TRANSIENT activation peak plus the cudagraph estimate, neither of
+    # which steady-state serving needs at the same time as a full cache, so it
+    # under-allocates KV. Pinning reclaims that. The safe value is FOUND, not
+    # computed -- raise it until startup dies during cudagraph capture, back
+    # off. On this box the XTX also has to leave room for the desktop.
+    # 6.0 GiB measured safe on the XTX at util 0.80 (vLLM self-selects 4.92,
+    # leaving ~1.1 GiB unclaimed). Raise only with a needle test -- an
+    # over-committed pin dies minutes in, during cudagraph capture.
+    : "${VLLM_KV_MEM:=${PIN_OVR:-6442450944}}"
+    if [[ -n "${VLLM_KV_MEM:-}" ]]; then
+        printf '  %q\n' --kv-cache-memory "$VLLM_KV_MEM"
+    fi
+    printf '  %q\n' --mamba-cache-mode align
+    # Custom AR is NOT CUDA-graph-capture-safe in this build: with graphs on it
+    # yields fast GARBAGE (battery 0/4, every prompt the same hash). Keep these
+    # two settings locked together.
+    printf '  %q\n' --disable-custom-all-reduce
+    if [[ "$GRAPHS" -eq 0 ]]; then
+        printf '  %q\n' --enforce-eager
+    fi
+    [[ -n "$SPEC" ]] && printf '  %q\n' --speculative-config "$SPEC"
+    echo ')'
+} > "$TMP"
+mv "$TMP" "$PROFILE_OUT"
+
+echo
+echo "Preset : $NAME"
+echo "Profile: $PROFILE_OUT"
+echo "Serving: http://127.0.0.1:${VLLM_PORT:-1234}/v1  (model id: local)"
+echo "         same host/port/alias as llama-server, so every harness entry"
+echo "         (Pi, oh-my-pi, Cline, OpenHands, ...) works unchanged."
+
+if [[ "$ACTION" == "command" ]]; then
+    exec "$SCRIPT_DIR/vllmctl" command --profile "$PROFILE_OUT"
+fi
+
+"$SCRIPT_DIR/vllmctl" restart --profile "$PROFILE_OUT"
+
+if [[ "$FOLLOW" -eq 1 ]]; then
+    echo
+    echo "--- following server log (Ctrl-C detaches; server keeps running) ---"
+    echo "--- ready when you see: Application startup complete ---"
+    echo
+    exec "$SCRIPT_DIR/vllmctl" logs --profile "$PROFILE_OUT"
+fi

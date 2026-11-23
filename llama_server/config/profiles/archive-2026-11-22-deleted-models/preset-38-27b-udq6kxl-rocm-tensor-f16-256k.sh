@@ -62,6 +62,30 @@ LLAMA_CACHE_TYPE_K="f16"
 LLAMA_CACHE_TYPE_V="f16"
 
 LLAMA_SPEC_MODE="mtp"
+# *** MTP n-max IS SETTLED AT 3 -- DO NOT SWEEP IT AGAIN. *** User decision,
+# 2026-09-03: "MTP 3 is the default for this model as shipped by Qwen. MTP 3 is
+# final." Corrected 10-seed runs at temp 1.0 put n2/n3/n4/n5 within a few percent
+# of each other on code, well inside their seed-to-seed spread -- there was never
+# an n-max win to find. (An earlier "+19.4% at n-max 5" was an artifact of
+# benchmarking at temp 0.7 and ctx 32768; both are wrong for this preset and both
+# inflate speculative results. It was shipped, caught, and reverted.)
+#
+# WHAT MTP ACTUALLY BUYS (ctx 262144, Unsloth thinking sampler, 8 seeds,
+# aggregate throughput). Measured 2026-09-03 -- see
+# records/2026-09-03-27b-rocm-speculation/SPECULATION-BY-CONTENT.md
+#
+#   prompt      no-spec   MTP n3   accept   speedup
+#   code  10k    29.70     50.46    56.3%    1.70x
+#   code  40k    28.30     50.85    63.2%    1.80x
+#   prose 10k    29.72     33.15    25.2%    1.12x
+#   prose 40k    28.29     28.02    19.7%    0.99x   <- break-even
+#
+# Code and prose diverge WITH DEPTH: code acceptance rises (56->63%) so the win
+# grows; prose acceptance falls (25->20%) until drafting exactly cancels itself.
+# Without speculation tg is content-independent (29.70 vs 29.72), so all of that
+# spread is draft acceptance. Keep MTP on: large win for code, free for prose.
+# NOTE: an armed tool/structured grammar disables speculation outright.
+#
 LLAMA_SPEC_DRAFT_N_MAX=3
 LLAMA_SPEC_DRAFT_TYPE_K="f16"
 LLAMA_SPEC_DRAFT_TYPE_V="f16"

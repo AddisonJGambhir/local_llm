@@ -158,6 +158,7 @@ LLAMA_EXTRA_ARGS=(
     --batch-size 2048
     --no-mmap
     --mmproj "$LLAMA_SERVER_ROOT/models/mmproj-BF16.gguf"
+    --no-mmproj-offload
     # --reasoning-preserve REMOVED: the PR #25051 base (2026-06-29) predates
     # this flag and rejects it with "invalid argument".
 )

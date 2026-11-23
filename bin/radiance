@@ -1,0 +1,104 @@
+#!/bin/bash
+# radiance - serve Qwen3.8-27B with the radiance engine on the R9700 only, :1234 as model "local" (like loom / hipfire).
+#   radiance            menu of profiles (attach / stop if running)
+#   radiance PROFILE    start a profile directly (attaches if it is already running)
+#   radiance stop | restart [PROFILE] | status | logs | list
+# radiance serves /props (n_ctx) and the OpenAI API itself, so there is no proxy: one unit, radiance-backend.
+# ROCR_VISIBLE_DEVICES=1 = the R9700 (ROCm agent order: XTX, R9700, iGPU). The XTX is never touched.
+set -u
+R="$HOME/Desktop/local_llm/radiance"
+BIN="$R/src/build-ffmpeg/bin/radiance"; HOME_DIR="$R/src/build-ffmpeg/radiance_home"   # FFmpeg build: image input (2026-11-22); text-only build is src/build
+PORT=1234; UNIT=radiance-backend
+c_b=$'\e[1m'; c_d=$'\e[2m'; c_g=$'\e[32m'; c_r=$'\e[31m'; c_0=$'\e[0m'
+die() { echo "${c_r}radiance: $*${c_0}" >&2; exit 1; }
+port_busy() { ss -Htln "( sport = :$1 )" | grep -q .; }
+
+# name | model file | context | notes (measured speeds filled in after BetterBench)
+PROFILES=(
+  "q4s|IQ4R-S-V4 4.1 bpw, 97.1% top-1|256K|fastest: BetterBench 121-124 tg, pp 3,130-3,190 (4096 step), DFlash2 depth 7 - default · VISION"
+  "q4s-393k|IQ4R-S-V4 + YaRN 1.5|384K|127 tg, pp 3,040-3,160; needle found at 370K - long-context · VISION"
+  "q4l|IQ4R-L-V4 4.8 bpw, 98.1% top-1|256K|97.7-111 (prose 72-91), pp ~3,000 · VISION"
+  "q5|IQ5R-V4 5.4 bpw, 98.6% top-1|256K|best quality, slowest (not benchmarked) · VISION"
+)
+pfield() { cut -d'|' -f"$2" <<<"$1"; }
+cfg() { echo "$R/configs/$1.yaml"; }
+nctx() { awk '/max-model-len:/{print $2; exit}' "$(cfg "$1")"; }
+
+cmd_logs() { echo "radiance: live log (Ctrl+C detaches; server keeps running - 'radiance stop' to stop)"; exec journalctl --user -f -n 30 -o cat -u $UNIT; }
+cmd_stop() { systemctl --user stop $UNIT 2>/dev/null; systemctl --user reset-failed $UNIT >/dev/null 2>&1; echo "radiance: stopped"; }
+
+cmd_start() {
+  local p=$1 c; c=$(cfg "$p"); [[ -f "$c" ]] || die "no profile '$p' ($c)"
+  [[ -x "$BIN" ]] || die "not built yet - run $R/build-radiance.sh"
+  if systemctl --user is-active -q $UNIT; then
+    echo "radiance: already running ($(cat "$R/.running-profile" 2>/dev/null)) - attaching"; cmd_logs
+  fi
+  port_busy $PORT && die "port $PORT is in use (loom? hipfire? strata? llama-server?) - stop it first ('inference stop')"
+  # radiance binds without SO_REUSEADDR, so it fails ("cannot bind") while the engine that just stopped
+  # still has closed connections on :$PORT in TIME_WAIT (~60 s after loom/hipfire stop). Wait them out.
+  local tw=0; while ss -Htan state time-wait "( sport = :$PORT )" | grep -q .; do
+    (( tw == 0 )) && echo "radiance: waiting for the last engine's connections on :$PORT to clear (up to ~60 s)..."
+    (( ++tw > 75 )) && break; sleep 1; done
+  systemctl --user reset-failed $UNIT >/dev/null 2>&1
+  local n; n=$(nctx "$p")
+  echo "radiance: starting '$p' on the R9700 (${n} ctx)..."
+  systemd-run --user --quiet --unit=$UNIT --working-directory="$R" \
+    -E ROCR_VISIBLE_DEVICES=1 -E HIP_VISIBLE_DEVICES=0 -E RADIANCE_HOME="$HOME_DIR" \
+    "$BIN" --config "$c" || die "failed to start"
+  local t0=$SECONDS
+  until curl -sf -m 2 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
+    systemctl --user is-active -q $UNIT || { journalctl --user -u $UNIT -n 25 -o cat --no-pager; die "server exited during load"; }
+    (( SECONDS - t0 > 900 )) && { cmd_stop; die "not ready after 15 min"; }
+    sleep 2
+  done
+  echo "$p, $n ctx" > "$R/.running-profile"
+  echo "${c_g}radiance: ready${c_0} - http://127.0.0.1:$PORT/v1 (model 'local', $n ctx) in $((SECONDS - t0))s"
+  local L="$HOME/Desktop/local_llm/llama_server"
+  if [[ -z "${RADIANCE_NO_SYNC:-}" ]]; then
+    [[ -f "$L/src/server/sync_clients.py" ]] && python3 "$L/src/server/sync_clients.py" --alias local --context "$n" >/dev/null 2>&1 && echo "        synced Pi/clients to $n ctx"
+    if [[ -x "$L/bin/hermes-sync-ctx" ]]; then
+      local hs; hs=$(LLAMA_PORT="$PORT" "$L/bin/hermes-sync-ctx" 2>&1); sed 's/^/        /' <<<"$hs"
+      grep -q '^updated ' <<<"$hs" && systemctl --user is-active --quiet hermes-gateway.service && \
+        systemctl --user restart hermes-gateway.service && echo "        restarted hermes-gateway for the new context"
+    fi
+  fi
+  cmd_logs
+}
+
+cmd_status() {
+  echo "$UNIT: $(systemctl --user is-active $UNIT)  ($(cat "$R/.running-profile" 2>/dev/null || echo -))"
+  curl -s -m 2 "http://127.0.0.1:$PORT/health" 2>/dev/null; echo
+  rocm-smi --showmeminfo vram 2>/dev/null | awk '/GPU\[1\].*Used/{printf "R9700 %.1f GB VRAM used\n",$NF/1e9}'
+}
+
+cmd_menu() {
+  local run="" i=1
+  systemctl --user is-active -q $UNIT && run=$(cat "$R/.running-profile" 2>/dev/null || echo "?")
+  echo "${c_b}radiance - Qwen3.8-27B on the R9700${c_0} (serves as 'local' on :$PORT; KV cache int8 = kv-cache-dtype i8, vision tower in RAM)"
+  for p in "${PROFILES[@]}"; do
+    printf "  %d) %-8s %-34s ctx %-5s KV int8\n     ${c_d}%s${c_0}\n" "$i" "$(pfield "$p" 1)" "$(pfield "$p" 2)" "$(pfield "$p" 3)" "$(pfield "$p" 4)"; i=$((i+1))
+  done
+  echo
+  [[ -n "$run" ]] && echo "${c_g}running now: $run${c_0} - picking another switches over"
+  read -r -p "Profile (1-${#PROFILES[@]}$([[ -n "$run" ]] && echo ", a=attach to logs, s=stop"), q=quit): " ch
+  case "$ch" in
+    a|A) cmd_logs ;; s|S) cmd_stop ;; q|Q|"") exit 0 ;;
+    *) [[ "$ch" =~ ^[0-9]+$ ]] && (( ch >= 1 && ch <= ${#PROFILES[@]} )) || die "invalid choice '$ch'"
+       local pick; pick=$(pfield "${PROFILES[$((ch-1))]}" 1)
+       [[ "$run" == "$pick,"* ]] && cmd_logs
+       [[ -n "$run" ]] && { cmd_stop; sleep 2; }
+       cmd_start "$pick" ;;
+  esac
+}
+
+case "${1:-menu}" in
+  menu) cmd_menu ;;
+  start) cmd_start "${2:-q4s}" ;;
+  stop) cmd_stop ;;
+  restart) p=${2:-$(cut -d, -f1 "$R/.running-profile" 2>/dev/null)}; cmd_stop; sleep 2; cmd_start "${p:-q4s}" ;;
+  status) cmd_status ;;
+  logs|watch) cmd_logs ;;
+  list) for p in "${PROFILES[@]}"; do tr '|' '\t' <<<"$p"; done ;;
+  -h|--help|help) sed -n 2,7p "$0" | sed 's/^# \{0,1\}//' ;;
+  *) [[ -f "$(cfg "$1")" ]] && cmd_start "$1" || die "unknown '$1' - try: radiance help" ;;
+esac

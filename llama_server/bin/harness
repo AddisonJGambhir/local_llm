@@ -13,10 +13,11 @@ echo "  5) OpenCode     (opencode)"
 echo "  6) OpenClaw     (openclaw)"
 echo "  7) Cline        (cline)"
 echo "  8) OpenHands    (openhands)"
-echo "  9) DeepSeek Harness (dsh-local)"
-echo " 10) Prime Agent (prime-agent)"
+echo "  9) Prime Agent  (prime-agent)"
+echo " 10) DeepSeek Harness - Web  (dsh-local)"
+echo " 11) Strix        (OpenRouter pentesting)"
 echo ""
-read -p "Selection (1/2/3/4/5/6/7/8/9/10): " CHOICE
+read -p "Selection (1/2/3/4/5/6/7/8/9/10/11): " CHOICE
 echo ""
 
 # Helper: open a command in a new terminal window
@@ -96,8 +97,13 @@ case "$CHOICE" in
             disown
             sleep 1
         fi
+        # -P pins the provider explicitly so this always boots local,
+        # regardless of whatever provider Cline last had active. Any
+        # OpenRouter model is already reachable (dynamic, no config needed —
+        # verified live): relaunch with `cline -P openrouter -m <id>`, e.g.
+        # `cline -P openrouter -m anthropic/claude-opus-5`.
         echo "Starting Cline (via tool_call_proxy on :1235; single tool call per turn; 20 retries)..."
-        exec cline -i --retries 20
+        exec cline -i -P openai-compatible --retries 20
         ;;
     8)
         # OpenHands — autonomous AI dev agent CLI (uv tool install openhands).
@@ -105,20 +111,41 @@ case "$CHOICE" in
         # without it OpenHands reads ~/.openhands/settings.json and hangs on
         # first-run setup. Model slug is LiteLLM's openai/<name>; llama-server
         # serves id "local", and any non-empty API key satisfies the client.
-        echo "Starting OpenHands (local llama.cpp on :1234)..."
-        export LLM_MODEL=openai/local
-        export LLM_BASE_URL=http://127.0.0.1:1234/v1
-        export LLM_API_KEY=local
+        #
+        # OpenHands has no in-session model switcher — it's one LLM_MODEL per
+        # process (LiteLLM env-var driven) — so the choice happens here at
+        # launch instead. LiteLLM natively resolves any `openrouter/<id>`
+        # string against OpenRouter's full catalog using OPENROUTER_API_KEY
+        # from the environment (already exported by ~/.profile) — no base
+        # URL needed for that branch.
         export OPENHANDS_SUPPRESS_BANNER=1
+        read -p "OpenHands model — Enter for local, or an OpenRouter id (e.g. anthropic/claude-opus-5): " OH_MODEL
+        if [[ -z "$OH_MODEL" ]]; then
+            echo "Starting OpenHands (local llama.cpp on :1234)..."
+            export LLM_MODEL=openai/local
+            export LLM_BASE_URL=http://127.0.0.1:1234/v1
+            export LLM_API_KEY=local
+        else
+            echo "Starting OpenHands (OpenRouter: $OH_MODEL)..."
+            export LLM_MODEL="openrouter/$OH_MODEL"
+            unset LLM_BASE_URL
+            export LLM_API_KEY="${OPENROUTER_API_KEY:-$(secret-tool lookup service openrouter_key account default 2>/dev/null)}"
+        fi
         exec openhands --override-with-envs
         ;;
     9)
-        echo "Starting DeepSeek Harness (local llama.cpp on :1234)..."
-        exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dsh-local"
-        ;;
-    10)
         echo "Starting Prime Agent (local Qwen3.8 via llama.cpp on :1234)..."
         exec prime-agent --provider local-llama --model local
+        ;;
+    10)
+        echo "Starting DeepSeek Harness Web (local llama.cpp on :1234)..."
+        exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dsh-local"
+        ;;
+    11)
+        STRIX_DEFAULT_MODEL="${STRIX_OPENROUTER_MODEL:-z-ai/glm-5.3}"
+        read -r -p "Strix OpenRouter model — Enter for $STRIX_DEFAULT_MODEL: " STRIX_MODEL
+        export STRIX_OPENROUTER_MODEL="${STRIX_MODEL:-$STRIX_DEFAULT_MODEL}"
+        exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/strix-openrouter"
         ;;
     *) echo "Invalid selection: '$CHOICE'"; exit 1 ;;
 esac

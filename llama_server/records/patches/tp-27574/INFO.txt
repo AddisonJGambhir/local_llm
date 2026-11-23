@@ -1,0 +1,8 @@
+worktree: llama.cpp-tp-27574
+base: 7872b3e3e1e90b01c49f3da01773d576e923d2c1
+subject: spec: port adaptive MTP draft depth (#27210) onto the Vulkan tensor build (#25051)
+branch: tp-27574
+origin: git@github.com:ggerganov/llama.cpp.git
+
+--- git status ---
+ M ggml/src/ggml-backend-meta.cpp

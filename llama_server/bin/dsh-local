@@ -2,10 +2,19 @@
 # Launch the official DeepSeek Harness against the managed local llama.cpp API.
 set -euo pipefail
 
-DSH_ROOT=/home/addison-gambhir/Desktop/deepseek-harness
+DSH_CLI=/home/addison-gambhir/.local/opt/deepseek-harness-0.2.2-rc.1/node_modules/.bin/dsh
+# dsh >=0.2.2 requires Node >=24.9; system Node is 22 — use the user-local Node 24 LTS.
+export PATH="/home/addison-gambhir/.local/opt/node-v24.22.3-linux-x64/bin:$PATH"
 export DSH_HOME="${DSH_HOME:-/home/addison-gambhir/.dsh-local}"
 export DSH_LOCAL_LLM_API_KEY="${DSH_LOCAL_LLM_API_KEY:-local}"
 export DSH_TELEMETRY_DISABLED="${DSH_TELEMETRY_DISABLED:-1}"
+
+# OpenRouter catalog route (settings.yaml: llm-pi-ai.providers.openrouter) —
+# key read live from the GNOME keyring, never written to disk.
+if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
+    OPENROUTER_API_KEY="$(secret-tool lookup service openrouter_key account default 2>/dev/null)"
+    export OPENROUTER_API_KEY
+fi
 
 # Reuse the existing Qwen Code MCP credential without storing a second copy.
 if [[ -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]] \
@@ -19,7 +28,7 @@ fi
 
 if [[ "${1:-}" == "--headless" ]]; then
     shift
-    exec "$DSH_ROOT/apps/cli/lib/bin.js" --profile headless "$@"
+    exec "$DSH_CLI" --profile headless "$@"
 fi
 
-exec "$DSH_ROOT/apps/cli/lib/bin.js" web "$@"
+exec "$DSH_CLI" web "$@"

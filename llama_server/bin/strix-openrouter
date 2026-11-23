@@ -1,0 +1,40 @@
+#!/bin/bash
+# Launch the official Strix CLI with the existing OpenRouter credential.
+# STRIX_OPENROUTER_MODEL accepts provider/model or openrouter/provider/model.
+# Usage: strix-openrouter [Strix CLI arguments]
+
+if ! command -v strix >/dev/null 2>&1; then
+    echo "Strix is missing. Install it with: uv tool install --python 3.12 strix-agent" >&2
+    exit 1
+fi
+
+# Help and version do not need credentials or a running Docker daemon.
+case "${1:-}" in
+    -h|--help|-v|--version) exec strix "$@" ;;
+esac
+
+model="${STRIX_OPENROUTER_MODEL:-z-ai/glm-5.3}"
+model="${model#openrouter/}"
+if [[ "$model" != */* || "$model" == /* || "$model" == */ || "$model" =~ [[:space:]] ]]; then
+    echo "Use an OpenRouter model id such as z-ai/glm-5.3." >&2
+    exit 1
+fi
+
+key="${OPENROUTER_API_KEY:-}"
+if [[ -z "$key" ]] && command -v secret-tool >/dev/null 2>&1; then
+    key="$(secret-tool lookup service openrouter_key account default 2>/dev/null)"
+fi
+if [[ -z "$key" ]]; then
+    echo "OpenRouter key not found. Set OPENROUTER_API_KEY or save it in your existing openrouter_key keyring entry." >&2
+    exit 1
+fi
+
+export OPENROUTER_API_KEY="$key"
+export LLM_API_KEY="$key"
+export STRIX_LLM="openrouter/$model"
+# Override any inherited local-model endpoint with OpenRouter's endpoint.
+export LLM_API_BASE="https://openrouter.ai/api/v1"
+unset key
+
+echo "Starting Strix ($STRIX_LLM)..."
+exec strix "$@"

@@ -1,0 +1,266 @@
+{
+  "schema": 2,
+  "betterbench_version": "0.6.1",
+  "corpus_version": "1.0",
+  "config": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "seed": null,
+    "greedy": false,
+    "warmup": 1,
+    "runs_per_category": 3,
+    "unique_nonce": true,
+    "run_single_stream": false,
+    "concurrency_levels": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "concurrency_requests": 48,
+    "run_concurrency": false,
+    "run_prefill": true,
+    "prefill_depths": [
+      2000,
+      8000,
+      16000
+    ],
+    "prefill_runs": 8,
+    "prefill_warmup": 2,
+    "prefill_max_tokens": 16,
+    "prefill_ctx_margin": 256,
+    "max_model_len": 32768,
+    "weights": {
+      "code": 0.3,
+      "reasoning": 0.2,
+      "prose": 0.15,
+      "json": 0.15,
+      "file_edit": 0.1,
+      "summarization": 0.1
+    },
+    "conf": 0.95,
+    "target_mde_pct": 1.0,
+    "ab_max_pairs": 200,
+    "ab_min_pairs": 12,
+    "timeout_s": 600.0
+  },
+  "env": {
+    "timestamp": "2026-11-22T04:51:11-0500",
+    "host": "addison-gambhir-X870E-AORUS-MASTER",
+    "os": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+    "python": "3.14.4",
+    "endpoint": "http://127.0.0.1:8102/v1",
+    "model": "Inkling-2-Mini",
+    "gpu": {
+      "vendor": "amd",
+      "rocm_smi_productname": [
+        "card0,AMD Radeon RX 7900 XTX,0x744c,Advanced Micro Devices Inc. [AMD/ATI],D70201,0x5304,0xc8,1,57282,gfx1100",
+        "card1,AMD Radeon AI PRO R9700,0x7551,Advanced Micro Devices Inc. [AMD/ATI],APM107573,0x5413,0xc0,2,42345,gfx1201",
+        "card2,AMD Radeon Graphics,0x13c0,Advanced Micro Devices Inc. [AMD/ATI],RAPHAEL,-0x3000,0xc9,3,163,gfx1036"
+      ],
+      "sclk_range_raw": [
+        "============================ ROCm System Management Interface ============================",
+        "================================= Show Valid sclk Range ==================================",
+        "GPU[0]\t\t: Valid sclk range: 500Mhz - 2930Mhz",
+        "GPU[1]\t\t: get_od_volt, Unexpected data received"
+      ]
+    },
+    "categories": [],
+    "notes": {
+      "arm": "xtx-pf2048-pfonly"
+    },
+    "corpus_hash": "44136fa355b3678a",
+    "max_model_len": 32768
+  },
+  "prefill": [
+    {
+      "target_depth": 2000,
+      "prompt_tokens": [
+        1634,
+        1637,
+        1619,
+        1625,
+        1614,
+        1626,
+        1598,
+        1608
+      ],
+      "ttft_ms": [
+        384.28222699440084,
+        383.4662230074173,
+        380.95957798941527,
+        383.4949029987911,
+        381.8684849975398,
+        383.3021980099147,
+        379.5101449941285,
+        381.50291399506386
+      ],
+      "pp_tps": [
+        4252.083196196862,
+        4268.954869509683,
+        4249.794711933933,
+        4237.344453063363,
+        4226.586019556964,
+        4242.083683428136,
+        4210.691126648862,
+        4214.908827723411
+      ],
+      "tokens_per_update": [
+        3.2,
+        2.6666666666666665,
+        3.2,
+        3.2,
+        3.2,
+        2.6666666666666665,
+        3.2,
+        2.6666666666666665
+      ],
+      "cached_tokens": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "batched_runs": 8
+    },
+    {
+      "target_depth": 8000,
+      "prompt_tokens": [
+        6294,
+        6308,
+        6299,
+        6252,
+        6315,
+        6295,
+        6355,
+        6425
+      ],
+      "ttft_ms": [
+        1447.7525770053035,
+        1456.2006190099055,
+        1459.6552710136166,
+        1441.019966994645,
+        1457.4282350076828,
+        1472.659217994078,
+        1466.6911310050637,
+        1479.9500149965752
+      ],
+      "pp_tps": [
+        4347.427937596372,
+        4331.82071045191,
+        4315.402496115289,
+        4338.593595645321,
+        4332.974926869529,
+        4274.580244419666,
+        4332.882271978544,
+        4341.362839889473
+      ],
+      "tokens_per_update": [
+        2.6666666666666665,
+        2.6666666666666665,
+        2.2857142857142856,
+        3.2,
+        2.6666666666666665,
+        2.6666666666666665,
+        3.2,
+        3.2
+      ],
+      "cached_tokens": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "batched_runs": 8
+    },
+    {
+      "target_depth": 16000,
+      "prompt_tokens": [
+        12483,
+        12672,
+        12621,
+        12617,
+        12533,
+        12711,
+        12393,
+        12497
+      ],
+      "ttft_ms": [
+        2880.0429940019967,
+        2906.7149280017475,
+        2912.636113993358,
+        2917.1346880029887,
+        2901.1463220085716,
+        2923.784064987558,
+        2867.267423993326,
+        2898.814622996724
+      ],
+      "pp_tps": [
+        4334.310295366148,
+        4359.560642815257,
+        4333.188048916975,
+        4325.134541057939,
+        4320.016506896811,
+        4347.448278487725,
+        4322.233739446568,
+        4311.072498689448
+      ],
+      "tokens_per_update": [
+        2.6666666666666665,
+        3.2,
+        2.2857142857142856,
+        3.2,
+        3.2,
+        3.2,
+        3.2,
+        2.6666666666666665
+      ],
+      "cached_tokens": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "batched_runs": 8
+    }
+  ],
+  "sample_gate": {
+    "rule": "n * min(pct, 100-pct) / 100 >= 5",
+    "under_sampled": [
+      {
+        "section": "prefill",
+        "key": 2000,
+        "metric": "pp_p99",
+        "n": 8,
+        "need": 500
+      },
+      {
+        "section": "prefill",
+        "key": 8000,
+        "metric": "pp_p99",
+        "n": 8,
+        "need": 500
+      },
+      {
+        "section": "prefill",
+        "key": 16000,
+        "metric": "pp_p99",
+        "n": 8,
+        "need": 500
+      }
+    ]
+  }
+}

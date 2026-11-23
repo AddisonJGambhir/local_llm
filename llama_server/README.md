@@ -1,28 +1,24 @@
-# Local LLM Workstation (`llama_server/`)
+# llama.cpp (`llama_server/`)
 
-Local llama.cpp serving, benchmarking, and diagnostics across **five models** on a
-dual-GPU AMD workstation:
+One of six engines on this machine (see the [top-level README](../README.md)). llama.cpp serves Qwen3.8-27B in GGUF across both GPUs
+(XTX gfx1100 + R9700 gfx1201) on `:1234` as `local`. `inference llama` or `llamaserver` opens the launcher.
 
-| GPU | Model | VRAM | Role |
-| --- | --- | --- | --- |
-| RX 7900 XTX (gfx1100, 24 GB) | N/A | 24 GB | Drives the desktop |
-| AI PRO R9700 (gfx1201, 32 GB) | N/A | 32 GB | Compute partner |
+## Current presets (2026-11-23)
 
-## Models in use
+The models listed further down in this file (Qwen3.6 35B MoE, Muse Glimmer, Flash-Next GGUFs) were deleted from disk on 2026-11-22. Their
+presets were removed or archived in `config/profiles/archive-2026-11-22-deleted-models/`. Sections below that mention them are historical.
 
-| Model | Size | Arch | Specs | Dec t/s | Pre t/s | GPU |
-| --- | ---: | --- | --- | ---: | ---: | --- |
-| **Qwen3.6 35B-A3B** Q8_0 | 36 GB | MoE (3B active) | MTP n_max=2, f16 KV, dual-GPU | 93.7 vk / **94.4** rocm | **2072** / **3128** | dual |
-| **Qwen3.8 27B** Q8_0 | 28 GB | Dense + vision | MTP n_max=3, f16 KV, dual-GPU | 35.0 vk / **38.5** rocm | 825 / **982** | dual |
-| **Muse Glimmer 30B** Q8_0 | 28 GB | Dense | DFlash n_max=2, f16 KV, dual-GPU | 31.7 vk / **33.2** rocm | 743 / **986** | dual |
-| Qwen3.6 27B-MTP Q4_K_M | 16 GB | Dense | MTP, q8_0 KV, single-GPU | ~73–76 (May harness) | N/A | single |
+| Launcher entry | Model | Split (XTX, R9700) | Context | KV | pp | tg | Vision |
+| --- | --- | --- | ---: | --- | ---: | ---: | --- |
+| ROCm 1 | Qwen3.8 27B Q8_0, MTP n3 | layer 1,1 | 240K | f16 | 509 @ 65K deep | 34.4 | CPU encoder |
+| ROCm 2 ★ | Qwen3.8 27B Q8_0, MTP n3 | tensor 45,55 | 240K | f16 | 275 @ 65K deep | 44.8 | CPU encoder |
+| ROCm 3 | Qwen3.8 27B Q8_0, MTP n3 | tensor 58,42 | 128K | f16 | - | 45-48 | CPU encoder |
+| Vulkan 1 | Qwen3.8 27B Q8_0, MTP n3 | layer 28,37 | 256K | f16 | 825 | 35.0 | CPU encoder |
+| Vulkan 2 | Qwen3.8 27B Q8_0, MTP n3 | tensor 50,50 | 216K | f16 | 947 | 40.3 | CPU encoder |
+| Vulkan 4 ★ | Qwen3.8 27B Q8_0, MTP adaptive | tensor 49,51 | 256K | f16 | 809 | 50.9 | CPU encoder |
+| ROCm / Vulkan custom | Qwen3.8 27B Q8_0 or UD-Q6_K_M | you pick | you pick | q8_0 / q5_1 | | | |
 
-**Profile selection is workload-driven (2026-08-16 numbers):**
-
-- Long generation (chat, agentic, reasoning): **35B MoE ROCm dual** (94.4 t/s, 3128 prefill).
-- Vision + coding: **35B MoE ROCm dual with `--mmproj`** (vision tower pinned to the R9700).
-- Text-only, maximum prefill: **Qwen3.8 27B ROCm `ppopt`** (q8_0 KV, ts 1,1).
-- Dense quality, single GPU: **27B MTP Q4_K_M** 128k presets.
+The other engines beat llama.cpp on every model they share. Use llama.cpp for its GGUF flexibility and for split experiments.
 
 ## Quick start
 
@@ -417,7 +413,22 @@ dual-GPU headroom makes these ceilings moot for the tuned profiles.
 | `diagnose_hermes_400` | `src/diagnostics/diagnose_hermes_400.py` | Hermes-specific 400 debugging |
 | `tool_call_proxy` | `src/server/tool_call_proxy.py` | Forces `parallel_tool_calls: false` on Cline requests (Cline's system prompt batches tool calls; Cline's pipeline expects one per turn). |
 | `sync_clients` | `src/server/sync_clients.py` | Pushes alias/context into OpenCode, OpenClaw, Cline, and Kilo config files after a healthy start. |
-| `harness` | `bin/harness` | Menu of coding/agent front-ends: Pi, Qwen Code, Hermes, oh-my-pi, OpenCode, OpenClaw, Cline, OpenHands, Kilo Code |
+| `harness` | `bin/harness` | Menu of coding/agent front-ends: Pi, Qwen Code, Hermes, oh-my-pi, OpenCode, OpenClaw, Cline, OpenHands, Prime Agent, DeepSeek Harness Web, Strix |
+| `strix-openrouter` | `bin/strix-openrouter` | Strix penetration testing CLI using OpenRouter; reads `OPENROUTER_API_KEY` or the existing `openrouter_key` keyring entry. |
+
+Choose **11** in `harness` to launch Strix, then press Enter for `z-ai/glm-5.3`
+or enter another OpenRouter model ID. Strix opens its target setup screen.
+The default follows the [Strix OpenRouter documentation](https://docs.strix.ai/llm-providers/openrouter).
+To launch directly with CLI arguments:
+
+```bash
+strix-openrouter --target ./my-project
+STRIX_OPENROUTER_MODEL=anthropic/claude-sonnet-5.5 strix-openrouter --target ./my-project
+```
+
+Strix is installed as the isolated `uv` tool `strix-agent`; update it with
+`uv tool upgrade strix-agent`. Docker must be running. The launcher pins
+`LLM_API_BASE` to OpenRouter so inherited local-model settings do not change the route.
 
 ### Local LLM MCP Server
 

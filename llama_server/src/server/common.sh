@@ -108,7 +108,7 @@ llama_validate_profile() {
         *) llama_die "unsupported backend: $LLAMA_BACKEND" || return ;;
     esac
     case "$LLAMA_SPEC_MODE" in
-        none|mtp|mtp-adaptive|dflash) ;;
+        none|mtp|mtp-adaptive|dflash|ngram-mod) ;;
         *) llama_die "unsupported speculative mode: $LLAMA_SPEC_MODE" || return ;;
     esac
     if [[ "$LLAMA_SPEC_MODE" == "dflash" && ! -r "${LLAMA_DRAFTER:-}" ]]; then
@@ -158,6 +158,30 @@ llama_build_command() {
     fi
 
     case "$LLAMA_SPEC_MODE" in
+        ngram-mod)
+            # Draft-free n-gram speculation: no draft model, no build, no prefill
+            # cost. Gain tracks depth because it amortizes the per-token costs
+            # that grow with n_kv (CPU PLE lookup, QSA indexer, mask build).
+            # Measured on Flash-Next at ctx 200704 (2026-09-02): +1.7% @10.8K,
+            # -0.8% on prose @13K, +19.3% @61.4K, prefill unchanged.
+            # Costs ~439 MiB of XTX VRAM -- see preset 16 for the depth limit.
+            LLAMA_CMD+=(--spec-type ngram-mod)
+            if [[ -n "${LLAMA_SPEC_DRAFT_N_MAX:-}" ]]; then
+                LLAMA_CMD+=(--spec-draft-n-max "$LLAMA_SPEC_DRAFT_N_MAX")
+            fi
+            if [[ -n "${LLAMA_SPEC_DRAFT_P_MIN:-}" ]]; then
+                LLAMA_CMD+=(--spec-draft-p-min "$LLAMA_SPEC_DRAFT_P_MIN")
+            fi
+            if [[ -n "${LLAMA_SPEC_NGRAM_MOD_N_MATCH:-}" ]]; then
+                LLAMA_CMD+=(--spec-ngram-mod-n-match "$LLAMA_SPEC_NGRAM_MOD_N_MATCH")
+            fi
+            if [[ -n "${LLAMA_SPEC_NGRAM_MOD_N_MIN:-}" ]]; then
+                LLAMA_CMD+=(--spec-ngram-mod-n-min "$LLAMA_SPEC_NGRAM_MOD_N_MIN")
+            fi
+            if [[ -n "${LLAMA_SPEC_NGRAM_MOD_N_MAX:-}" ]]; then
+                LLAMA_CMD+=(--spec-ngram-mod-n-max "$LLAMA_SPEC_NGRAM_MOD_N_MAX")
+            fi
+            ;;
         mtp)
             LLAMA_CMD+=(
                 --spec-type draft-mtp

@@ -1,0 +1,18 @@
+worktree: llama.cpp-tp-chain
+base: 7872b3e3e1e90b01c49f3da01773d576e923d2c1
+subject: spec: port adaptive MTP draft depth (#27210) onto the Vulkan tensor build (#25051)
+branch: tp-chain
+origin: git@github.com:ggerganov/llama.cpp.git
+
+--- git status ---
+UU common/speculative.cpp
+M  ggml/src/ggml-backend-meta.cpp
+UU src/llama-context.cpp
+M  src/llama-context.h
+M  src/llama-cparams.h
+M  src/llama-ext.h
+M  src/llama-graph.h
+M  src/llama-model.cpp
+M  src/models/delta-net-base.cpp
+M  src/models/qwen35.cpp
+ M tools/server/server-context.cpp

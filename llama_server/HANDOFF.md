@@ -54,11 +54,42 @@ The draft PR comment: `docs/PR25051_COMMENT_DRAFT.md`.
 
 ## Environment (verify before starting)
 
-- GPU 0: RX 7900 XTX (NAVI31, gfx1100) 24560 MiB, PCIe 5.0 x16, drives desktop.
-- GPU 1: AI PRO R9700 (GFX1201, gfx1201) 32624 MiB, PCIe 4.0 x4 via chipset.
+- GPU 0: RX 7900 XTX (NAVI31, gfx1100) 24560 MiB, drives desktop. CPU-attached
+  (root port `00:01.1`, Gen5 x16 capable); the card is Gen4, so it trains at 16 GT/s x16.
+- GPU 1: AI PRO R9700 (GFX1201, gfx1201) 32624 MiB. Behind the chipset
+  (`00:02.1` -> two cascaded Promontory switches). The CPU uplink is PCIe 4.0 x4 and
+  that is the hard ceiling for everything on this card. The board (X870E AORUS MASTER)
+  has only ONE CPU-attached x16 slot and no bifurcation, so a second compute card
+  necessarily lands on this same x4 path.
 - GPU 2: Ryzen iGPU (granite ridge) -- leave unused.
-- CPU Ryzen 9 9950X3D (16C/32T), 64 GB RAM. No P2P, no xGMI. All tensor allreduce
-  round-trips through system memory.
+- CPU Ryzen 9 9950X3D (16C/32T), 64 GB RAM.
+- Interconnect -- MEASURED 2026-09-05 (`hipMemcpyPeer`, `HIP_VISIBLE_DEVICES=0,1`).
+  **P2P WORKS**: `hipDeviceCanAccessPeer` YES both directions, `hipDeviceEnablePeerAccess`
+  succeeds. (This corrects an earlier claim here that there was no P2P and that all
+  allreduce round-trips through system memory -- it does not.) No xGMI; PCIe only
+  (`rocm-smi --showtopo`: 2 hops, weight 40).
+
+  | path | measured |
+  | --- | ---: |
+  | XTX <-> host (Gen4 x16, direct) | 28.2 GB/s |
+  | R9700 <-> host (Gen4 x4, chipset) | 7.0 GB/s |
+  | GPU <-> GPU peer copy | 6.9 GB/s |
+  | 10 KiB peer copy (latency) | 22.8 us |
+
+  6.9 GB/s is 88% of Gen4 x4 theoretical -- there is no tuning headroom left.
+  **Bandwidth is NOT the limiter for decode.** A 27B TP=2 all-reduce moves 10 KiB
+  (n_embd 5120, bf16); 130 per token = 1.3 MB/token = ~78 MB/s at 60 tok/s, i.e. 88x
+  headroom. The cost is LATENCY: only 1.5 us of that 22.8 us is transfer. Chained,
+  ~4.0 ms of comm per token (upper bound: sequential blocking copies; real RCCL fuses),
+  a ~247 tok/s ceiling. Prefill is where the x4 actually bites: a 2048-token chunk
+  moves 2.66 GB of allreduce = ~389 ms.
+  Benchmarks: `src/benchmarks/p2p_bw.hip` (streaming) and `src/benchmarks/p2p_lat.hip`
+  (small-payload latency + simulated TP=2 allreduce chain). Build and run:
+  ```
+  /opt/rocm/bin/hipcc --offload-arch=gfx1100 --offload-arch=gfx1201 -O2 \
+      llama_server/src/benchmarks/p2p_lat.hip -o /tmp/p2p_lat
+  HIP_VISIBLE_DEVICES=0,1 /tmp/p2p_lat   # 0,1 excludes the iGPU
+  ```
 - OS Ubuntu 26.04, kernel 7.0.0-29-generic. Vulkan driver RADV (prints
   "not a conformant Vulkan implementation, testing use only" at startup: expected, ignore).
 - ROCm 7.1.52801, HIP/clang 21, `GGML_HIP_ARCHITECTURES=gfx1100;gfx1201`, RCCL OFF by default.

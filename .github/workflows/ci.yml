@@ -1,5 +1,8 @@
 name: CI
 
+# Scope: this repo's own setup (launchers, engine configs, proxies, patch scripts, bench scripts) and docs.
+# Engine source trees (llama.cpp*, vLLM, Loom, hipfire, radiance src, Strata) are not vendored here and are not checked.
+
 on:
   push:
   pull_request:
@@ -13,58 +16,74 @@ jobs:
     name: Secret detection (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   shell:
-    name: Shellcheck
+    name: Shellcheck (launchers + scripts)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-
       - name: shellcheck
         run: |
           set -euo pipefail
-          # Check tracked files that carry a shell shebang.
-          # Sourced profile files are excluded: their whole purpose is to
-          # define variables consumed by common.sh, so SC2034 is a false positive there.
+          # Every tracked file with a shell shebang, except:
+          #   */config/profiles/*  sourced variable files (consumed by common.sh / hipfirectl)
+          #   llama_server/records  raw historical run artifacts, kept as recorded
+          # SC2034 (unused variable) is excluded: config-style scripts define variables for other scripts.
           mapfile -t files < <(
             git ls-files -z \
               | xargs -0 grep -lE '^#!.*(ba|z|da)?sh' \
-              | grep -v '^llama_server/config/profiles/' \
+              | grep -vE '/config/profiles/|^llama_server/records/' \
               | sort
           )
           echo "Checking ${#files[@]} files:"
           printf '  %s\n' "${files[@]}"
-          shellcheck --severity=warning "${files[@]}"
+          shellcheck --severity=warning --exclude=SC2034 "${files[@]}"
 
   python:
-    name: Python (syntax + basic checks)
+    name: Python (syntax + ruff errors)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Syntax check
-        run: python -m compileall -q llama_server
-
+        run: python -m compileall -q llama_server loom bench-scripts hipfire/local vllm/bin
       - name: Ruff (errors + undefined names)
         run: |
           pip install ruff -q
-          ruff check --select E9,F llama_server
+          ruff check --select E9,F --exclude llama_server/records llama_server loom bench-scripts hipfire/local vllm/bin
+
+  docs:
+    name: Docs (relative links resolve)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check relative links in top-level and engine READMEs
+        run: |
+          python3 - <<'EOF'
+          import pathlib, re, sys
+          docs = [p for p in ["README.md", "loom/README.md", "radiance/README.md", "strata/README.md",
+                              "vllm/README.md", "hipfire/README.md", "llama_server/README.md"] if pathlib.Path(p).exists()]
+          bad = []
+          for d in docs:
+              base = pathlib.Path(d).parent
+              for target in re.findall(r"\]\(([^)#\s]+)(?:#[^)]*)?\)", pathlib.Path(d).read_text()):
+                  if re.match(r"[a-z]+:", target):
+                      continue
+                  if not (base / target).exists():
+                      bad.append(f"{d}: {target}")
+          print(f"checked {len(docs)} docs")
+          if bad:
+              print("broken relative links:", *bad, sep="\n  ")
+              sys.exit(1)
+          EOF

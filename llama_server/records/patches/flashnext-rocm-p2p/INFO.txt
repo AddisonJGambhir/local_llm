@@ -1,0 +1,11 @@
+worktree: llama.cpp-flashnext-rocm-p2p
+base: aa1b06d0c6da845bc2569639e51aedfaf335151f
+subject: model: qwen4exp: reduce number of graph splits
+branch: HEAD
+origin: https://github.com/ggml-org/llama.cpp
+
+--- git status ---
+ M ggml/src/ggml-cuda/allreduce.cu
+ M ggml/src/ggml-cuda/allreduce.cuh
+ M ggml/src/ggml-cuda/ggml-cuda.cu
+?? ggml/src/ggml-cuda/allreduce-hip.cu

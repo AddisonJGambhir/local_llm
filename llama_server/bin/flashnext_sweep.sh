@@ -14,6 +14,7 @@ CTX="${FN_CTX:-65536}"
 UB="${FN_UB:-1024}"
 BATCH="${FN_B:-2048}"
 TS="${FN_TS:-385,615}"
+SPLIT_MODE="${FN_SPLIT_MODE:-layer}"
 CTK="${FN_CTK:-q8_0}"
 CTV="${FN_CTV:-q8_0}"
 OT="${FN_OT:-per_layer_token_embd\\.weight=CPU}"
@@ -36,6 +37,10 @@ SPEC_TYPE="${FN_SPEC_TYPE:-none}"
 LOG_VERBOSITY="${FN_LOG_VERBOSITY:-2}"
 CURL_TIMEOUT="${FN_CURL_TIMEOUT:-600}"
 IGNORE_EOS="${FN_IGNORE_EOS:-false}"
+TEMPERATURE="${FN_TEMPERATURE:-0}"
+TOP_K="${FN_TOP_K:-1}"
+TOP_P="${FN_TOP_P:-1.0}"
+SEED="${FN_SEED:-42}"
 MEM_NEED="${FN_MEM_NEED:-30}"
 R9700_MAX="${R9700_MAX:-32500}"
 XTX_MAX="${XTX_MAX:-24200}"
@@ -101,14 +106,15 @@ fi
 
 args=(
     -m "$MODEL" -c "$CTX" --device "$DEV"
-    --split-mode layer --tensor-split "$TS"
+    --split-mode "$SPLIT_MODE" --tensor-split "$TS"
     -ub "$UB" -b "$BATCH" --flash-attn on
     --cache-type-k "$CTK" --cache-type-v "$CTV"
-    --load-mode "$LOADMODE" -ot "$OT"
+    --load-mode "$LOADMODE"
     --spec-type "$SPEC_TYPE"
     --host 127.0.0.1 --port "$PORT" --parallel 1
     --fit off --log-verbosity "$LOG_VERBOSITY"
 )
+[[ "$OT" != "skip" ]] && args+=( -ot "$OT" )
 [[ "$LAZY" != "skip" ]] && args+=( --tensor-read-lazy "$LAZY" )
 [[ "$NGL" != "skip" ]] && args+=( -ngl "$NGL" )
 [[ -n "$THREADS" ]] && args+=( -t "$THREADS" )
@@ -116,7 +122,11 @@ args=(
 # shellcheck disable=SC2206
 [[ -n "$EXTRA" ]] && args+=( $EXTRA )
 
-echo "CONFIG tag=$TAG ctx=$CTX ub=$UB ts=$TS kv=$CTK/$CTV load=$LOADMODE spec=$SPEC_TYPE threads=${THREADS:-default} min_prompt_tokens=$MIN_PROMPT_TOKENS"
+echo "CONFIG tag=$TAG ctx=$CTX ub=$UB split_mode=$SPLIT_MODE ts=$TS kv=$CTK/$CTV load=$LOADMODE spec=$SPEC_TYPE threads=${THREADS:-default} min_prompt_tokens=$MIN_PROMPT_TOKENS"
+echo "CONFIG sampler=temp:$TEMPERATURE top_k:$TOP_K top_p:$TOP_P seed:$SEED ignore_eos:$IGNORE_EOS"
+if [[ "$SPEC_TYPE" != "none" && ( "$TEMPERATURE" == "0" || "$TEMPERATURE" == "0.0" ) ]]; then
+    echo "WARNING: greedy sampling can overstate speculative decode; use FN_TEMPERATURE/FN_TOP_K/FN_TOP_P for serving-representative tests"
+fi
 echo "CONFIG bin=$BIN run=$RUN"
 GGML_VK_ALLOW_GRAPHICS_QUEUE=1 "$BIN" "${args[@]}" >"$LOG" 2>&1 &
 PID=$!
@@ -180,12 +190,16 @@ if [[ -n "$PROMPT_FILE" ]]; then
     jq -n --rawfile prompt "$PROMPT_FILE" \
         --argjson prompt_chars "$PROMPT_CHARS" \
         --argjson n_predict "$NPRED" --argjson ignore_eos "$IGNORE_EOS" \
-        '{prompt:(if $prompt_chars > 0 then $prompt[0:$prompt_chars] else $prompt end),n_predict:$n_predict,temperature:0,top_k:1,seed:42,stream:false,cache_prompt:false,ignore_eos:$ignore_eos}' \
+        --argjson temperature "$TEMPERATURE" --argjson top_k "$TOP_K" \
+        --argjson top_p "$TOP_P" --argjson seed "$SEED" \
+        '{prompt:(if $prompt_chars > 0 then $prompt[0:$prompt_chars] else $prompt end),n_predict:$n_predict,temperature:$temperature,top_k:$top_k,top_p:$top_p,seed:$seed,stream:false,cache_prompt:false,ignore_eos:$ignore_eos}' \
         >"$request"
 else
     jq -n --arg prompt 'Write three sentences about why memory bandwidth matters for language model inference.' \
         --argjson n_predict "$NPRED" --argjson ignore_eos "$IGNORE_EOS" \
-        '{prompt:$prompt,n_predict:$n_predict,temperature:0,top_k:1,seed:42,stream:false,cache_prompt:false,ignore_eos:$ignore_eos}' \
+        --argjson temperature "$TEMPERATURE" --argjson top_k "$TOP_K" \
+        --argjson top_p "$TOP_P" --argjson seed "$SEED" \
+        '{prompt:$prompt,n_predict:$n_predict,temperature:$temperature,top_k:$top_k,top_p:$top_p,seed:$seed,stream:false,cache_prompt:false,ignore_eos:$ignore_eos}' \
         >"$request"
 fi
 

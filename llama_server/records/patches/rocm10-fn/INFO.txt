@@ -1,0 +1,9 @@
+worktree: llama.cpp-rocm10-fn
+base: 458681e1d5d4a29a1463c4732e03226cf384b997
+subject: metal : add fa-vec tunings for M1 Ultra (#28088)
+branch: HEAD
+origin: https://github.com/ggml-org/llama.cpp
+
+--- git status ---
+M  src/llama-kv-cache.cpp
+M  src/llama-kv-cells.h

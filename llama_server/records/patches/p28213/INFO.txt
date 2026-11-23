@@ -1,0 +1,19 @@
+worktree: llama.cpp-qsa28213
+base: aa1b06d0c6da845bc2569639e51aedfaf335151f
+subject: model: qwen4exp: reduce number of graph splits
+contents: fusions + scan fixes + PR #28213 (mask-free QSA gather, QWEN4EXP_QSA_GATHER toggle)
+upstream PR: https://github.com/ggml-org/llama.cpp/pull/28213 (open as of 2026-09-02)
+origin: https://github.com/ggml-org/llama.cpp
+
+--- git status ---
+ M ggml/src/ggml-vulkan/ggml-vulkan.cpp
+ M ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_base.glsl
+ M ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iface.glsl
+ M ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+ M src/llama-graph.cpp
+ M src/llama-kv-cache.cpp
+ M src/llama-kv-cells.h
+ M src/models/models.h
+ M src/models/qwen4exp.cpp
+?? ggml/src/ggml-vulkan/vulkan-shaders/mul_bcast_add.comp
+?? ggml/src/ggml-vulkan/vulkan-shaders/topk_radix.comp

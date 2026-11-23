@@ -1,3 +1,7 @@
+> **SUPERSEDED by `2026-08-31-FLASHNEXT-HANDOFF-9.md`.** The successor contains
+> actual 199K-populated measurements, the corrected preset, current online PR
+> research, and the live same-prompt A/B. Keep this file as historical context.
+>
 > **SUPERSEDED AGAIN: the final profile was not validated with populated
 > context.** A 262,144-token allocation plus an 8,948-token prompt does not
 > reveal Vulkan's later VRAM-to-GTT migration. A real 104,769-token read found

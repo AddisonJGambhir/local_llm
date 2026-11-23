@@ -1,148 +1,71 @@
 # Local LLM Workstation
 
-Local [llama.cpp](https://github.com/ggml-org/llama.cpp) inference on a dual-GPU AMD
-workstation: five tuned models, OpenAI-compatible API on `127.0.0.1:1234`,
-benchmark harness, and a versioned profile system. Everything here is measured,
-not guessed, numbers below come from the 2026-08-16 harness run
-(6.2k-token uncached prefill, 256-token decode at ~10k context depth, fixed seed,
-Pi sampling: temp 0.6 / top_p 0.95 / top_k 20).
+Six local inference engines on one dual-GPU AMD desktop. Each engine is tuned for the models and the GPU it runs best on.
+All six serve the same OpenAI-compatible endpoint, **`http://127.0.0.1:1234/v1`, model `local`**, so coding agents
+(Pi, Hermes, Qwen Code, DeepSeek Harness) work with whichever engine is running.
+Every number here was measured on this machine with [BetterBench](https://github.com/GGZ14/BetterBench) at temp 1.0 / top_p 0.95 / top_k 20,
+thinking on, and 3 passes per category unless noted.
+
+```bash
+inference            # menu: shows what holds :1234, pick an engine, opens that engine's own profile menu
+inference status     # which engine is serving 'local' + VRAM per GPU
+inference stop       # stop whatever is serving :1234
+inference loom       # jump straight to one engine's menu (llama | vllm | strata | hipfire | loom | radiance)
+```
 
 ## Hardware
 
-| GPU | Chip | VRAM | Role |
-| --- | --- | ---: | --- |
-| RX 7900 XTX | gfx1100 | 24 GiB | **Drives the desktop**, must stay under ~24.2 GB or the compositor spills to system RAM and the screen drops to ~3 fps |
-| AI PRO R9700 | gfx1201 | 32 GiB | Compute partner |
+| Device | Chip | Memory | Link | Role |
+| --- | --- | ---: | --- | --- |
+| Radeon RX 7900 XTX | gfx1100 (RDNA3) | 24 GiB | CPU, PCIe 4.0 x16 | compute |
+| Radeon AI PRO R9700 | gfx1201 (RDNA4) | 32 GiB | chipset, PCIe 4.0 x4 (7 GB/s) | compute |
+| Ryzen iGPU | gfx1036 | shared | - | **drives the display**, so both dGPUs are free for models |
 
-CPU: Ryzen 9 9950X3D (16c/32t) · 64 GB DDR5 · Ubuntu 26.04
+Ryzen 9 9950X3D (16c/32t), 64 GB DDR5, Ubuntu 26.04, ROCm 10.0 (`/opt/rocm`). Rules that hold for every engine:
+- Weights live in VRAM, never in system RAM.
+- Vision encoders go on the CPU (or in pinned RAM) wherever the engine allows it.
+- Every launcher menu lists **context and KV-cache type** for each option.
 
-## The llama.cpp situation
+## Engines at a glance
 
-| Tree | What it is |
-| --- | --- |
-| `llama.cpp/` | **Mainline, pinned at b10358, the only engine in use.** Two builds: `build/` (ROCm: `GGML_HIP`, `AMDGPU_TARGETS=gfx1100;gfx1201`, HIP graphs, MMQ/MFMA) and `build-vulkan/` (Vulkan). |
-| `llama.cpp-next/` | Next-line build (ROCm, same targets) for testing incoming fixes before touching the pinned tree. |
-| ~~`llama.cpp-beellama-032-hip/`~~ | Removed 2026-08-16. BeeLlama's one exclusive feature (KVarN KV) is superseded by f16 KV, and mainline measured within 0.4% of it on MTP decode. |
+| Engine | Model | GPU(s) | Context | KV cache | Decode (tg) | Prefill (pp) | Vision |
+| --- | --- | --- | ---: | --- | ---: | ---: | --- |
+| [**Loom**](loom/) (AMD hrx-loom 0.2.0) | Inkling-2-Mini UD-Q4_K_XL (26B MoE) | R9700 | **448K** | **int8** (our patch) | **127** | 4,300-4,400 | yes |
+| | | XTX | 64K | f16 | 154 | 4,200-4,300 | text only |
+| [**radiance**](radiance/) 2.2.0 | Qwen3.8-27B IQ4R-S-V4 | R9700 | 256K / 384K | int8 | 121-127 | 3,040-3,190 | yes (tower in RAM) |
+| [**hipfire**](hipfire/) 0.4.7 | Qwen3.8-27B MQ4-XTS | XTX | 156-236K | q8 / fwht3 | 121-125 (DFlash) | 2,150-2,600 | yes |
+| | | R9700 | 262K | fp8 / fwht3 | 119-124 | 3,300-4,900 | yes |
+| [**Strata**](strata/) 0.2.19 | Qwen3.8-Flash-Next 125B UD-IQ4_XS (MoE) | XTX + R9700 | 256K | int8 | 110 | 986-1,963 | yes (CPU) |
+| [**vLLM**](vllm/) 0.28 mixed-RDNA fork | Qwen3.8-27B AWQ-INT4 | XTX + R9700 (TP=2) | 262K | bf16 | 68 (92.6 mean) | 1,250 | yes |
+| [**llama.cpp**](llama_server/) b10358+ | Qwen3.8-27B Q8_0 / UD-Q6_K_M | XTX + R9700 | 128-256K | f16 (presets), q8_0 / q5_1 (custom) | 34-51 | 509-947 | yes (CPU) |
 
-**Why b10358 is pinned:** b10450 measures ~5% slower (upstream `#26696` removed
-`-funsafe-math-optimizations`). The upgrade path being considered: b10450 + a local
-one-line patch restoring that flag. All current models are hybrid (SWA, SSM, or
-recurrent), so speculative depth and KV precision **do not transfer between models:**
-each preset was tuned for its own model/backend/topology.
+Which engine to use:
+- **Longest context:** Loom `r9700-vision`. It holds 448K (a 440K-token prompt with a needle at 50% and 90% depth was answered correctly) and reads images.
+- **Fastest decode for code and agents:** Loom on the XTX (154 tok/s, 64K). For Qwen 27B, hipfire DFlash on the XTX.
+- **Best prose with Qwen 27B:** hipfire MTP K=3, or radiance on the R9700.
+- **Biggest model:** Strata. Qwen3.8-Flash-Next 125B MoE runs across both cards with experts streamed.
+- **Concurrency (many subagents):** vLLM. It has 8 slots in a shared 294K-token KV pool. The other engines serve one request at a time.
 
-## Quick start
-
-```bash
-llamaserver        # interactive launcher: pick backend/model/KV/spec/context
-llamakill          # stop the server
-harness            # pick a coding/agent front-end pointed at the local server
-
-llamactl status    # what's running: resolved command + GPU residency + health
-llamactl logs      # follow the rotating server log
-llamactl command   # print the resolved server command WITHOUT launching
-llamactl restart --profile config/profiles/<name>.sh   # start a specific preset
-```
-
-OpenAI-compatible API at `http://127.0.0.1:1234/v1`, model alias `local`.
-Full operational detail: [`llama_server/README.md`](llama_server/README.md).
-
-## Presets (shipped configurations)
-
-All profiles in `llama_server/config/profiles/` (17 total: `default.sh` + 16 presets).
-Start one with `llamactl restart --profile config/profiles/<file>`.
-Pre t/s = prompt processing · Dec t/s = decode · Acc = draft acceptance.
-¹ measured on the 2026-05 harness (pre-f16-KV era), re-measure before trusting.
-
-### Single-GPU (RX 7900 XTX only)
-
-| Profile | Model | Backend | KV | Spec | Ctx | Pre t/s | Dec t/s | Acc |
-| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |
-| `default.sh` | 35B MoE Q8_0 | Vulkan | q8_0 | MTP n2 | 256k | N/A | ~94¹ | N/A |
-| `preset-27b-q4km-q8-128k` | 27B MTP Q4_K_M | Vulkan | q8_0 | MTP n4 | 128k | N/A | ~76¹ | N/A |
-| `preset-27b-q4km-rocm-q8-128k` | 27B MTP Q4_K_M | ROCm | q8_0 | MTP n2 | 128k | N/A | ~49¹ | N/A |
-| `preset-36-27b-q4km-vulkan-xtx-only-128k` | 27B MTP Q4_K_M | Vulkan | q8_0 | MTP n2 | 128k | N/A | , | N/A |
-
-`default.sh` is the canonical single-GPU fallback (q8_0 KV, ubatch 1024); the
-xtx-only preset is for when the R9700 is needed elsewhere (batch 2048).
-
-### Dual-GPU (ROCm + Vulkan)
-
-| Profile | Model | Backend | KV | Spec | Ctx | Pre t/s | Dec t/s | Acc | XTX / R9700 GiB |
-| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
-| `preset-36-35b-a3b-q8-rocm-dual-256k-textonly` | **35B MoE Q8_0** | ROCm | f16 | MTP n2 | 256k | **3128** | **94.4** | 80.9% | 21.0 / 30.2 |
-| `preset-36-35b-a3b-q8-rocm-dual-q8-256k-mmproj` | **35B MoE Q8_0** + vision | ROCm | f16 | MTP n2 | 256k | 3128 | 94.4 | 80.9% | 21.0 / 30.2 |
-| `preset-36-35b-a3b-q8-vulkan-dual-256k-textonly` | 35B MoE Q8_0 | Vulkan | f16 | MTP n2 | 256k | 2072 | 93.7 | N/A | , |
-| `preset-36-35b-a3b-q8-vulkan-dual-q8-256k-mmproj` | 35B MoE Q8_0 + vision | Vulkan | f16 | MTP n2 | 256k | 2072 | 93.7 | N/A | , |
-| `preset-36-27b-q4km-rocm-dual-256k` | 27B MTP Q4_K_M | ROCm | f16 | MTP n2 | 256k | 1408 | 36.9 | 69.8% | 19.7 / 20.9 |
-| `preset-36-27b-q4km-vulkan-dual-256k` | 27B MTP Q4_K_M | Vulkan | f16 | MTP n2 | 256k | N/A | , | N/A | , |
-| `preset-38-27b-q8-rocm-dual-q8-256k-mmproj` | Qwen3.8 27B + vision | ROCm | f16 | MTP n3 | 256k | 982 | 38.5 | 42–72% | 22.5 / 29.7 |
-| `preset-38-27b-q8-rocm-dual-256k-ppopt` | Qwen3.8 27B + vision | ROCm | q8_0 | MTP n3 | 256k | N/A | , | N/A | , |
-| `preset-38-27b-q8-vulkan-dual-q8-256k-mmproj` | Qwen3.8 27B + vision | Vulkan | f16 | MTP n3 | 256k | 825 | 35.0 | 53.8% | 22.2 / 29.4 |
-| `preset-muse-glimmer-30b-q8-rocm-dual-128k-dflash` | Muse Glimmer 30B | ROCm | f16 | DFlash n2 | 128k | 986 | 33.2 | 58.5% | 18.2 / 16.5 |
-| `preset-muse-glimmer-30b-q8-rocm-dual-256k-yarn` | Muse Glimmer 30B | ROCm | f16 | DFlash n2 | 256k | 891 | 34.1 | N/A | 19.9 / 18.3 |
-| `preset-muse-glimmer-30b-q8-vulkan-dual-128k-dflash` | Muse Glimmer 30B | Vulkan | f16 | DFlash n2 | 128k | 743 | 31.7 | 43.2% | 18.2 / 16.5 |
-
-**Shape of the table:** the ~3B-active MoE (35B-A3B) reads far fewer bytes per
-token than the dense 27/30B models, so it sits at ~94 t/s while everything dense
-sits at 32–39 t/s. It also adds vision and working speculation. The `mmproj`
-profiles pin the
-vision tower to the R9700 (`MTMD_BACKEND_DEVICE`) to keep it off the constrained XTX;
-their text stats are the text-only siblings'. `ppopt` is the pre-f16 q8_0
-text-only/prefill variant, kept for maximum prefill when vision isn't needed.
-
-## Models
-
-| GGUF (`llama_server/models/`) | Size | Type | Role |
-| --- | ---: | --- | --- |
-| `Qwen3.6-35B-A3B-Q8_0` | 36 GB | MoE (3B active) + MTP | **Dual-GPU primary**, vision, working speculation |
-| `Qwen3.8-27B-Q8_0` | 28 GB | Dense + MTP + vision | Dual-GPU, f16 KV, ts 28,37 |
-| `Muse-Glimmer-30B-Q8_0` | 28 GB | Dense + DFlash sidecar | Dual-GPU, YaRN 256k variant |
-| `Qwen3.6-27B-MTP-Q4_K_M` | 16 GB | Dense + MTP | Single-GPU |
-| `dflash-kquant` + 2× `mmproj-*` | 3.3 GB | Muse drafter + vision projectors | Sidecars |
-
-## Standing rules (measured, not guessed)
-
-1. **f16 KV everywhere**, it's not a space/speed tradeoff, it *raises speculative
-   acceptance* (quantized KV makes drafter and target disagree: Muse 43.6 → 58.5%,
-   +19% decode). q8_0 only where f16 genuinely does not fit, and record why in the profile.
-2. **XTX ceiling ~24.2 GB**, it drives the desktop; the compositor evicts to GTT
-   above ~24.4 GB and the screen freezes. `llamactl status` reports per-process VRAM/GTT.
-3. **Tensor splits are not a property of the model**, they depend on what else is
-   resident on the XTX. The 35B shipped at `18,22`, moved to `16,24` when the desktop
-   grew; re-check splits whenever the desktop footprint changes.
-4. **Large batch is ROCm-only**, `--batch-size 6144–12288` is worth +13% prefill on
-   ROCm and a measured no-op on Vulkan (confirmed on three models).
-5. **Draft depth does not transfer**, per model × backend × topology. On this box
-   Muse wants n_max 2 on both backends; upstream's "15" (single-GPU Q5_K_M era)
-   measures *worst* (6.5% acceptance).
-
-## Benchmarks & diagnostics
-
-| Tool | What it finds |
-| --- | --- |
-| `llama-benchmark` | Full backend × model × spec × KV matrix (encode/decode t/s, VRAM) |
-| `llama-benchmark-mtp` | MTP `n_max` 2→6 sweep; depth pinned by default (production); `--adaptive` tests adaptive-p |
-| `llama-benchmark-ctx` | Max context before VRAM spill, per model, via binary search on fdinfo GTT |
-| `llama-watch` / `llama-proxy` | Log watcher + TCP-tee postmortem of 4xx/5xx responses |
-
-All require the GPU free (`llamakill` first) and stream CSV + per-run logs to
-`llama_server/output/benchmarks/<stamp>/`.
-
-## Docs
-
-Deep operational reference: [`llama_server/README.md`](llama_server/README.md).
-Findings and history in [`llama_server/docs/`](llama_server/docs/):
-[2026-08-16 results](llama_server/records/2026-08-16-dual-gpu/RESULTS_2026-08-16.md) ·
-[2026-08-16 optimizations audit](llama_server/records/2026-08-16-dual-gpu/AUDIT_2026-08-16_OPTIMIZATIONS.md) ·
-[speculation backend audit](llama_server/archive/model-audits/QWEN36_SPECULATION_BACKEND_AUDIT.md) ·
-[live tuning queue](llama_server/docs/active/TUNING_QUEUE.md) ·
-[setup guide](llama_server/docs/SETUP.md).
+Only one engine can hold :1234 at a time. `inference` asks before stopping the current one.
+The XTX and the R9700 can also run separate engines on separate ports. For example, Loom on the XTX and radiance on the R9700 measured
+no interference.
 
 ## Layout
 
-```text
-llama_server/        the workstation: profiles, llamactl, benchmarks, diagnostics, models, docs
-llama.cpp/           mainline b10358, ROCm (build/) + Vulkan (build-vulkan/)
-llama.cpp-next/      next-line build for testing upcoming fixes
-integrations/        MCP servers + front-end glue (agent_tools, searxng, …)
-```
+| Path | What |
+| --- | --- |
+| `bin/` | `inference` (front door), plus the `loom`, `hipfire`, `radiance` launchers. The installed copies are in `~/.local/bin`. |
+| [`loom/`](loom/) | Loom proxy, watchdog, and the package patch scripts (RDNA4 port, sampler, **int8 KV**) |
+| [`radiance/`](radiance/) | radiance build scripts (with FFmpeg for vision) and the serving configs |
+| [`hipfire/`](hipfire/) | the :1234 proxy for hipfire, plus the older `hipfirectl` 0.3.0 tooling |
+| [`strata/`](strata/) | Strata launcher and engine configs (the engine itself is upstream Niko1221/Strata) |
+| [`vllm/`](vllm/) | vLLM launcher menu, llama.cpp-compat shim, R9700 serve script |
+| [`llama_server/`](llama_server/) | llama.cpp launcher, presets, benchmark harness, records |
+| `bench-scripts/` | needle tests, context-cap probes, vision long-context tests, BetterBench wrappers |
+| `integrations/` | agent tools (local-llm MCP, filtered Firecrawl MCP, agent chatroom, SearXNG config) |
+
+Engine source trees, model weights, venvs and builds are not in git (see `.gitignore`). Each engine README says where they come from.
+
+## Related
+
+- **[loom-inkling2-mini-r9700](https://github.com/AddisonJGambhir/loom-inkling2-mini-r9700)**: the Loom R9700 setup packaged for other single-R9700 owners. It has a one-command install and the int8 KV build.

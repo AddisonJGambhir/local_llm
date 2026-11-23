@@ -41,7 +41,7 @@ BENCH="$ROOT/llama.cpp/build/bin/llama-bench"
 
 M="${1:?model path required}"; OUT="${2:?output file required}"; shift 2
 [ -x "$BENCH" ] || { echo "vram-probe: no llama-bench at $BENCH" >&2; exit 1; }
-cd "$ROOT"
+cd "$ROOT" || exit 1
 
 while [ $# -ge 2 ]; do
     TS="$1"; CTX="$2"; shift 2
