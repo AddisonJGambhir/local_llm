@@ -38,9 +38,9 @@ open_new_terminal() {
 
 case "$CHOICE" in
     1)
-         # Pi — minimal harness, connect to local llama.cpp on :1234
-         # The llama-cpp extension auto-discovers the server via LLAMA_SERVER_URL
-         echo "Starting Pi (connected to local llama.cpp on :1234)..."
+         # Pi — minimal harness on "local" (:1234, whatever engine `inference` started).
+         # The pi-llama-cpp extension reads /props from the server (LLAMA_SERVER_URL).
+         echo "Starting Pi (local on :1234)..."
          export LLAMA_SERVER_URL=http://127.0.0.1:1234
          exec pi
          ;;
@@ -52,11 +52,11 @@ case "$CHOICE" in
     3) exec hermes ;;
     4)
          # oh-my-pi (omp) — enhanced Pi fork (LSP, browser, subagents, AST edits).
-         # Config: ~/.omp/agent/{models.yml,config.yml}. Boots on the local
-         # llama-server (127.0.0.1:1234); switch to an OpenRouter model any time
+         # Config: ~/.omp/agent/{models.yml,config.yml} (catalog: harness-sync). Boots on
+         # "local" (127.0.0.1:1234); switch to an OpenRouter model any time
          # with /model or Ctrl+P. The OpenRouter key is read from the keyring by
          # models.yml (!secret-tool), so no export is needed here.
-         echo "Starting oh-my-pi (local Qwen3.6 default; /model → OpenRouter)..."
+         echo "Starting oh-my-pi (local; /model → OpenRouter)..."
          exec omp
          ;;
     5) exec opencode ;;
@@ -79,12 +79,12 @@ case "$CHOICE" in
     7)
         # Cline — autonomous coding agent CLI (npm -g cline). Provider config is
         # persisted in ~/.cline via `cline auth`; "openai-compatible" points at
-        # tool_call_proxy on :1235, not llama-server directly. Re-point with:
+        # tool_call_proxy on :1235, not :1234 directly. Re-point with:
         #   cline auth -p openai -b http://127.0.0.1:1235/v1 -m local -k local
         #
         # Cline's own system prompt tells the model to batch multiple tool
         # calls into one turn, and Cline never sends parallel_tool_calls, so
-        # llama.cpp falls back to the template's default (on, for Qwen3.6).
+        # the engine falls back to the chat template's default (often on).
         # A second tool call in the same turn crashes Cline's Hub ("Hub
         # connection closed", 1006) or leaks raw <function=...> markup mid
         # grammar transition. tool_call_proxy.py forces
@@ -109,7 +109,7 @@ case "$CHOICE" in
         # OpenHands — autonomous AI dev agent CLI (uv tool install openhands).
         # --override-with-envs is REQUIRED for these LLM_* vars to take effect;
         # without it OpenHands reads ~/.openhands/settings.json and hangs on
-        # first-run setup. Model slug is LiteLLM's openai/<name>; llama-server
+        # first-run setup. Model slug is LiteLLM's openai/<name>; :1234
         # serves id "local", and any non-empty API key satisfies the client.
         #
         # OpenHands has no in-session model switcher — it's one LLM_MODEL per
@@ -121,7 +121,7 @@ case "$CHOICE" in
         export OPENHANDS_SUPPRESS_BANNER=1
         read -p "OpenHands model — Enter for local, or an OpenRouter id (e.g. anthropic/claude-opus-5): " OH_MODEL
         if [[ -z "$OH_MODEL" ]]; then
-            echo "Starting OpenHands (local llama.cpp on :1234)..."
+            echo "Starting OpenHands (local on :1234)..."
             export LLM_MODEL=openai/local
             export LLM_BASE_URL=http://127.0.0.1:1234/v1
             export LLM_API_KEY=local
@@ -134,11 +134,11 @@ case "$CHOICE" in
         exec openhands --override-with-envs
         ;;
     9)
-        echo "Starting Prime Agent (local Qwen3.8 via llama.cpp on :1234)..."
-        exec prime-agent --provider local-llama --model local
+        echo "Starting Prime Agent (local on :1234)..."
+        exec prime-agent --provider local --model local
         ;;
     10)
-        echo "Starting DeepSeek Harness Web (local llama.cpp on :1234)..."
+        echo "Starting DeepSeek Harness Web (local on :1234)..."
         exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dsh-local"
         ;;
     11)

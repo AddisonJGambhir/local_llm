@@ -54,7 +54,7 @@ no interference.
 
 | Path | What |
 | --- | --- |
-| `bin/` | `inference` (front door), plus the `loom`, `hipfire`, `radiance` launchers. The installed copies are in `~/.local/bin`. |
+| `bin/` | `inference` (front door), plus the `loom`, `hipfire`, `radiance` launchers. The installed copies are in `~/.local/bin`. `harness-sync` refreshes every harness's OpenRouter catalog from the live API and keeps the local model labeled `local` (Pi, oh-my-pi, OpenCode, OpenClaw, Hermes, Prime, Qwen Code, DeepSeek Harness). |
 | [`loom/`](loom/) | Loom proxy, watchdog, and the package patch scripts (RDNA4 port, sampler, **int8 KV**) |
 | [`radiance/`](radiance/) | radiance build scripts (with FFmpeg for vision) and the serving configs |
 | [`hipfire/`](hipfire/) | the :1234 proxy for hipfire, plus the older `hipfirectl` 0.3.0 tooling |

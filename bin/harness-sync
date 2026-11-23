@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+"""harness-sync - refresh every harness's OpenRouter catalog from the live API and keep the local model labeled "local".
+
+  harness-sync            fetch https://openrouter.ai/api/v1/models once, update every harness config below
+  harness-sync --dry-run  report what would change, write nothing
+  harness-sync --source F use a saved API response instead of fetching
+
+Local model: one entry everywhere, id and display name "local", http://127.0.0.1:1234 (whatever engine runs there;
+`inference` picks it). Context and image support are read from :1234 /props when an engine is up, else kept as is.
+Every changed file gets a timestamped .bak-harness-sync-* copy; a file that changes while the script runs is not overwritten.
+API keys are never read into output or written anywhere: entries reference env vars / keyring commands that already exist.
+
+Harnesses: Pi, oh-my-pi, OpenCode, OpenClaw, Hermes, Prime Agent, Qwen Code, DeepSeek Harness (shared + web profile).
+Cline and Strix fetch OpenRouter's list live (nothing to refresh); their local entry is already "local".
+"""
+import argparse
+import datetime
+import json
+import os
+import re
+import shutil
+import tempfile
+import urllib.request
+from decimal import Decimal
+from pathlib import Path
+
+import yaml
+
+H = Path.home()
+URL = "https://openrouter.ai/api/v1/models"
+LOCAL = "http://127.0.0.1:1234"
+STAMP = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"]
+DRY = False
+report = []
+
+
+# ---------- I/O ----------
+def write(path, text, original):
+    if DRY:
+        report.append(f"  would update {path}")
+        return
+    if path.read_bytes() != original:
+        raise RuntimeError(f"{path} changed during the sync; not overwritten")
+    backup = path.with_name(f"{path.name}.bak-harness-sync-{STAMP}")
+    shutil.copy2(path, backup)
+    os.chmod(backup, 0o600)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.chmod(tmp, os.stat(path).st_mode & 0o777)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def dump_json(data):
+    return json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+
+
+def dump_yaml(data):
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=200)
+
+
+# ---------- catalog builders ----------
+def per_million(pricing, key):
+    v = Decimal(str(pricing.get(key) or "0"))
+    v = Decimal(0) if v < 0 else v * 1_000_000   # -1 = variable router pricing
+    return float(v)
+
+
+def is_reasoning(m):
+    params = set(m.get("supported_parameters") or [])
+    return bool(m.get("reasoning")) or bool(params & {"reasoning", "reasoning_effort", "include_reasoning"})
+
+
+def inputs(m):
+    got = [k for k in (m.get("architecture") or {}).get("input_modalities", ["text"]) if k in ("text", "image")]
+    return got or ["text"]
+
+
+def pi_entry(m, prev):
+    """pi-ai format (Pi, oh-my-pi, OpenClaw, Prime)."""
+    e = dict(prev or {})
+    p = m.get("pricing") or {}
+    e.update(id=m["id"], name=m.get("name") or m["id"], contextWindow=int(m.get("context_length") or 128000),
+             input=inputs(m), reasoning=is_reasoning(m),
+             cost={"input": per_million(p, "prompt"), "output": per_million(p, "completion"),
+                   "cacheRead": per_million(p, "input_cache_read"), "cacheWrite": per_million(p, "input_cache_write")})
+    mx = (m.get("top_provider") or {}).get("max_completion_tokens")
+    if mx:
+        e["maxTokens"] = int(mx)
+    else:
+        e.pop("maxTokens", None)
+    efforts = (m.get("reasoning") or {}).get("supported_efforts") if isinstance(m.get("reasoning"), dict) else None
+    if efforts is not None:
+        e["thinkingLevelMap"] = {lv: (lv if lv in efforts else None) for lv in LEVELS}
+    elif isinstance(e.get("thinkingLevelMap"), dict):   # old files wrote the string "None"; it means unsupported
+        e["thinkingLevelMap"] = {k: (None if v in ("None", None) else v) for k, v in e["thinkingLevelMap"].items()}
+    return e
+
+
+def opencode_entry(m, prev):
+    e = dict(prev or {})
+    p = m.get("pricing") or {}
+    params = set(m.get("supported_parameters") or [])
+    out = (m.get("top_provider") or {}).get("max_completion_tokens")
+    e.update(id=m["id"], name=m.get("name") or m["id"], reasoning=is_reasoning(m), tool_call="tools" in params,
+             limit={"context": int(m.get("context_length") or 128000), "output": int(out) if out else 32768},
+             cost={"input": per_million(p, "prompt"), "output": per_million(p, "completion"),
+                   "cache_read": per_million(p, "input_cache_read"), "cache_write": per_million(p, "input_cache_write")},
+             modalities={"input": inputs(m), "output": ["text"]}, status="active")
+    return e
+
+
+def refresh_list(old, live, build):
+    prev = {x.get("id"): x for x in old or []}
+    new = [build(m, prev.get(m["id"])) for m in live]
+    ids = {m["id"] for m in live}
+    return new, len(ids - prev.keys()), len(prev.keys() - ids)
+
+
+# ---------- local engine facts ----------
+def local_facts():
+    try:
+        with urllib.request.urlopen(f"{LOCAL}/props?model=local", timeout=5) as r:
+            d = json.load(r)
+        return int(d.get("n_ctx") or d["default_generation_settings"]["n_ctx"]), bool((d.get("modalities") or {}).get("vision"))
+    except Exception:
+        return None, None
+
+
+# ---------- harnesses ----------
+def pi(live, ctx, vision):
+    path = H / ".pi/agent/models.json"
+    raw = path.read_bytes(); d = json.loads(raw)
+    prov = d.setdefault("providers", {}).setdefault("openrouter", {"baseUrl": "https://openrouter.ai/api/v1", "api": "openai-completions"})
+    prov["models"], add, rem = refresh_list(prov.get("models"), live, pi_entry)
+    write(path, dump_json(d), raw)
+    report.append(f"Pi            {len(live)} OpenRouter models (+{add} new, -{rem} retired)")
+    path = H / ".pi/agent/settings.json"
+    raw = path.read_bytes(); s = json.loads(raw)
+    s["llamaSettings"] = dict(s.get("llamaSettings") or {})
+    s["llamaSettings"]["servers"] = [{"url": LOCAL, "id": "local", "name": "local"}]
+    s["defaultProvider"] = "local"; s["defaultModel"] = "local"
+    if json.loads(raw) != s:
+        write(path, dump_json(s), raw)
+    report.append("Pi            local provider id 'local' (picker shows 'Llama.cpp (local)': prefix is hard-coded in pi-llama-cpp)")
+
+
+def omp(live, ctx, vision):
+    path = H / ".omp/agent/models.yml"
+    raw = path.read_bytes(); d = yaml.safe_load(raw)
+    provs = d.setdefault("providers", {})
+    local = provs.pop("llama-server", None) or provs.get("local") or {}
+    local.update(baseUrl=LOCAL, api="openai-completions", auth="none", discovery={"type": "llama.cpp"})
+    # discovery alone never surfaced the model (omp: 'Model "llama-server/local" not found'); list it explicitly
+    lm = next((m for m in local.get("models") or [] if m.get("id") == "local"), {})
+    lm.update(id="local", name="local", contextWindow=ctx or lm.get("contextWindow") or 262144,
+              input=["text", "image"] if (vision or vision is None) else ["text"], reasoning=True, maxTokens=32768,
+              cost={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0})
+    local["models"] = [lm]
+    orp = provs.pop("openrouter", {"baseUrl": "https://openrouter.ai/api/v1", "api": "openai-completions"})
+    orp["models"], add, rem = refresh_list(orp.get("models"), live, pi_entry)
+    d["providers"] = {"local": local, "openrouter": orp, **{k: v for k, v in provs.items() if k != "local"}}
+    header = ("# oh-my-pi (omp) model config - managed by `harness-sync` (local_llm/bin).\n"
+              "# local: whatever engine serves 127.0.0.1:1234 as model \"local\" (see `inference`). discovery.type llama.cpp\n"
+              "# is the /props protocol: omp reads the live context (n_ctx) from the running engine at launch.\n"
+              "# openrouter: the full live OpenRouter catalog; the API key comes from the keyring (apiKey command).\n\n")
+    write(path, header + dump_yaml(d), raw)
+    path = H / ".omp/agent/config.yml"
+    raw = path.read_bytes(); t = raw.decode()
+    t2 = t.replace("llama-server/local", "local/local").replace("  - llama-server\n", "  - local\n")
+    if t2 != t:
+        write(path, t2, raw)
+    report.append(f"oh-my-pi      {len(live)} OpenRouter models (+{add}, -{rem}); provider 'local' (roles: local/local)")
+
+
+def opencode(live, ctx, vision):
+    path = H / ".config/opencode/opencode.json"
+    raw = path.read_bytes(); d = json.loads(raw)
+    provs = d.setdefault("provider", {})
+    old_local = provs.pop("llama-local", None) or provs.get("local") or {}
+    lm = dict((old_local.get("models") or {}).get("local") or {})
+    lm.update(name="local", reasoning=True, tool_call=True,
+              modalities={"input": ["text", "image"] if (vision or vision is None) else ["text"], "output": ["text"]})
+    if ctx:
+        lm["limit"] = {"context": ctx, "output": 32768}
+    local = {"npm": "@ai-sdk/openai-compatible", "name": "local", "options": {"baseURL": f"{LOCAL}/v1"}, "models": {"local": lm}}
+    orp = provs.pop("openrouter", {})
+    prev = orp.get("models") or {}
+    orp["models"] = {m["id"]: opencode_entry(m, prev.get(m["id"])) for m in live}
+    add, rem = len({m["id"] for m in live} - prev.keys()), len(prev.keys() - {m["id"] for m in live})
+    d["provider"] = {"local": local, "openrouter": orp, **{k: v for k, v in provs.items() if k != "local"}}
+    for key in ("model", "small_model"):
+        if isinstance(d.get(key), str) and d[key].startswith("llama-local/"):
+            d[key] = "local/" + d[key].split("/", 1)[1]
+    write(path, dump_json(d), raw)
+    report.append(f"OpenCode      {len(live)} OpenRouter models (+{add}, -{rem}); provider 'local' (was 'llama.cpp')")
+
+
+def openclaw(live, ctx, vision):
+    path = H / ".openclaw/openclaw.json"
+    raw = path.read_bytes(); d = json.loads(raw)
+    provs = d["models"]["providers"]
+    for m in provs.get("custom-localhost-1234", {}).get("models", []):
+        if m.get("id") == "local":
+            m["name"] = "local"; m["reasoning"] = True
+            m["input"] = ["text", "image"] if (vision or vision is None) else ["text"]
+            if ctx:
+                m["contextWindow"] = ctx
+    orp = provs.setdefault("openrouter", {"baseUrl": "https://openrouter.ai/api/v1", "api": "openai-completions"})
+    old_ids = {m.get("id") for m in orp.get("models", [])}
+    orp["models"], add, rem = refresh_list(orp.get("models"), live, pi_entry)
+    # the model picker allow-list: keep non-OpenRouter entries, mirror the live catalog for OpenRouter
+    allow = d.setdefault("agents", {}).setdefault("defaults", {}).setdefault("models", {})
+    keep = {k: v for k, v in allow.items() if not k.startswith("openrouter/")}
+    keep.update({f"openrouter/{m['id']}": allow.get(f"openrouter/{m['id']}", {}) for m in live})
+    if len(old_ids):
+        d["agents"]["defaults"]["models"] = keep
+    write(path, dump_json(d), raw)
+    report.append(f"OpenClaw      {len(live)} OpenRouter models (+{add}, -{rem}); local model name 'local' (was 'local (Custom Provider)')")
+
+
+def hermes(live, ctx, vision):
+    path = H / ".hermes/config.yaml"
+    raw = path.read_bytes(); d = yaml.safe_load(raw)
+    orf = d.setdefault("providers", {}).setdefault("openrouter-full", {})
+    prev = orf.get("models") or {}
+    orf["models"] = {m["id"]: {**(prev.get(m["id"]) or {}), "context_length": int(m.get("context_length") or 128000)} for m in live}
+    add, rem = len({m["id"] for m in live} - prev.keys()), len(prev.keys() - {m["id"] for m in live})
+    for cp in d.get("custom_providers") or []:
+        if "1234" in str(cp.get("base_url")) and ctx:
+            for name in list((cp.get("models") or {}).keys()):
+                if name != "local":
+                    cp["models"]["local"] = cp["models"].pop(name)
+            cp.setdefault("models", {}).setdefault("local", {})["context_length"] = ctx
+    if (d.get("model") or {}).get("provider") == "custom":
+        d["model"]["default"] = "local"
+        if ctx:
+            d["model"]["context_length"] = ctx
+    write(path, dump_yaml(d), raw)
+    report.append(f"Hermes        {len(live)} OpenRouter models (+{add}, -{rem}); local 'local'")
+
+
+def prime(live, ctx, vision):
+    path = H / ".prime/agent/models.json"
+    raw = path.read_bytes(); d = json.loads(raw)
+    provs = d.setdefault("providers", {})
+    local = provs.pop("local-llama", None) or provs.get("local") or {"baseUrl": f"{LOCAL}/v1", "api": "openai-completions"}
+    ms = local.get("models") or [{"id": "local"}]
+    for m in ms:
+        if m.get("id") == "local":
+            m["name"] = "local"; m["reasoning"] = True
+            m["input"] = ["text", "image"] if (vision or vision is None) else ["text"]
+            if ctx:
+                m["contextWindow"] = ctx
+    local["models"] = ms
+    orp = provs.pop("openrouter", {"baseUrl": "https://openrouter.ai/api/v1", "api": "openai-completions"})
+    orp["models"], add, rem = refresh_list(orp.get("models"), live, pi_entry)
+    d["providers"] = {"local": local, "openrouter": orp, **{k: v for k, v in provs.items() if k != "local"}}
+    write(path, dump_json(d), raw)
+    report.append(f"Prime Agent   {len(live)} OpenRouter models (+{add}, -{rem}); provider 'local' (was 'local-llama', 'Qwen3.8-27B local (:1234)')")
+
+
+def qwen(live, ctx, vision):
+    path = H / ".qwen/settings.json"
+    raw = path.read_bytes(); d = json.loads(raw)
+    lst = d.setdefault("modelProviders", {}).setdefault("openai", [])
+    is_or = lambda m: "openrouter.ai" in (m.get("baseUrl") or "")
+    prev = {m["id"]: m for m in lst if is_or(m)}
+    others = [m for m in lst if not is_or(m) and m.get("id") != "local"]
+    old_local = next((m for m in lst if m.get("id") == "local"), {})
+    new = []
+    for m in live:
+        e = dict(prev.get(m["id"], {}))
+        e.update(id=m["id"], name="[OpenRouter] " + (m.get("name") or m["id"]), baseUrl="https://openrouter.ai/api/v1", envKey="OPENROUTER_API_KEY")
+        g = dict(e.get("generationConfig", {}))
+        if m.get("context_length"):
+            g["contextWindowSize"] = int(m["context_length"])
+        mods = set((m.get("architecture") or {}).get("input_modalities", ["text"]))
+        g["modalities"] = {k: k in mods for k in ["image", "audio", "video"]} | {"pdf": bool(mods & {"file", "pdf"})}
+        hd = dict(g.get("customHeaders", {})); hd.setdefault("HTTP-Referer", "https://github.com/QwenLM/qwen-code.git"); hd.setdefault("X-OpenRouter-Title", "Qwen Code")
+        g["customHeaders"] = hd; e["generationConfig"] = g
+        new.append(e)
+    loc = dict(old_local)
+    loc.update(id="local", name="local", baseUrl=f"{LOCAL}/v1", envKey="QWEN_LOCAL_API_KEY")
+    g = dict(loc.get("generationConfig", {}))
+    if ctx:
+        g["contextWindowSize"] = ctx
+    g["modalities"] = {"image": bool(vision or vision is None), "audio": False, "video": False, "pdf": False}
+    loc["generationConfig"] = g
+    d["modelProviders"]["openai"] = [loc] + new + others
+    add, rem = len({m["id"] for m in live} - prev.keys()), len(prev.keys() - {m["id"] for m in live})
+    write(path, dump_json(d), raw)
+    report.append(f"Qwen Code     {len(live)} OpenRouter models (+{add}, -{rem}); added 'local' (:1234)")
+
+
+def dsh(live, ctx, vision):
+    simple = lambda m, prev: {**(prev or {}), "id": m["id"], "name": m.get("name") or m["id"], "contextWindow": int(m.get("context_length") or 128000)}
+    local = {"displayName": "local", "api": "openai-completions", "baseURL": f"{LOCAL}/v1",
+             "models": [{"id": "local", "name": "local", "contextWindow": ctx or 262144}]}
+    # web profile: plain YAML
+    path = H / ".dsh-local/profiles/web/cordis.patch.yml"
+    raw = path.read_bytes(); entries = yaml.safe_load(raw)
+    for e in entries:
+        if e.get("id") == "llm-pi-ai":
+            pv = e["config"]["providers"]
+            pv.pop("local-llama", None)
+            orp = pv.pop("openrouter", {})
+            orp["models"], add, rem = refresh_list(orp.get("models"), live, simple)
+            e["config"]["providers"] = {"local": local, "openrouter": orp, **pv}
+    head = "".join(ln for ln in raw.decode().splitlines(True)[:3] if ln.startswith("#"))
+    write(path, head + dump_yaml(entries), raw)
+    # shared layer: YAML with an inline JSON block for llm-pi-ai and !!js tags elsewhere -> edit the JSON block only
+    path = H / ".dsh-local/cordis.patch.yml"
+    raw = path.read_bytes(); t = raw.decode()
+    m = re.search(r"(- id: llm-pi-ai\n  config:\n)(\s*\{)", t)
+    if m:
+        start = m.start(2); depth = 0; end = None
+        for i in range(t.index("{", start), len(t)):
+            if t[i] == "{": depth += 1
+            elif t[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1; break
+        cfg = json.loads(t[t.index("{", start):end])
+        pv = cfg["providers"]; pv.pop("local-llama", None)
+        orp = pv.pop("openrouter", {})
+        orp["models"], add2, rem2 = refresh_list(orp.get("models"), live, simple)
+        cfg["providers"] = {"local": local, "openrouter": orp, **pv}
+        block = "\n".join("    " + ln for ln in json.dumps(cfg, indent=2, ensure_ascii=False).splitlines())
+        write(path, t[:start] + block + t[end:], raw)
+    report.append(f"DeepSeek H.   {len(live)} OpenRouter models (web +{add}/-{rem}); provider 'local' (was 'Local llama.cpp', 'Qwen 3.8 27B Q8_0')")
+
+
+def main():
+    global DRY
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dry-run", action="store_true"); ap.add_argument("--source", type=Path)
+    a = ap.parse_args(); DRY = a.dry_run
+    if a.source:
+        payload = json.loads(a.source.read_text())
+    else:
+        with urllib.request.urlopen(urllib.request.Request(URL, headers={"User-Agent": "harness-sync/1"}), timeout=60) as r:
+            payload = json.load(r)
+    live = sorted(payload["data"], key=lambda m: m["id"])
+    if not live or len({m["id"] for m in live}) != len(live):
+        raise SystemExit("OpenRouter returned an empty or non-unique catalog; nothing changed")
+    ctx, vision = local_facts()
+    print(f"OpenRouter: {len(live)} models · local :1234: " + (f"{ctx:,} ctx, vision {'on' if vision else 'off'}" if ctx else "no engine up (context left as configured)"))
+    for fn in (pi, omp, opencode, openclaw, hermes, prime, qwen, dsh):
+        try:
+            fn(live, ctx, vision)
+        except FileNotFoundError:
+            report.append(f"{fn.__name__:<13} not installed - skipped")
+        except Exception as e:
+            report.append(f"{fn.__name__:<13} ERROR {type(e).__name__}: {e} (file left unchanged)")
+    print("\n".join(report))
+    if not DRY:
+        print(f"backups: *.bak-harness-sync-{STAMP}")
+
+
+if __name__ == "__main__":
+    main()

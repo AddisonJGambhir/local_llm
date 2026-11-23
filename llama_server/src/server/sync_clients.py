@@ -34,7 +34,7 @@ def main() -> int:
     opencode = Path("~/.config/opencode/opencode.json").expanduser()
 
     def mutate_opencode(data: dict[str, Any]) -> bool:
-        model = data["provider"]["llama-local"]["models"]["local"]
+        model = data["provider"]["local"]["models"]["local"]
         if model.get("name") == args.alias:
             return False
         model["name"] = args.alias
@@ -80,7 +80,7 @@ def main() -> int:
     kilo = Path("~/.config/kilo/kilo.jsonc").expanduser()
 
     def mutate_kilo(data: dict[str, Any]) -> bool:
-        model = data["provider"]["llama-local"]["models"]["local"]
+        model = data["provider"]["local"]["models"]["local"]
         if model.get("name") == args.alias:
             return False
         model["name"] = args.alias

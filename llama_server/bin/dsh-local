@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the official DeepSeek Harness against the managed local llama.cpp API.
+# Launch the official DeepSeek Harness against "local" on :1234 (any engine; see `inference`).
 set -euo pipefail
 
 DSH_CLI=/home/addison-gambhir/.local/opt/deepseek-harness-0.2.2-rc.1/node_modules/.bin/dsh
